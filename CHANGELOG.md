@@ -1,5 +1,43 @@
 # Changelog
 
+## [0.4.0] - Sprint 4 - Correções e Melhorias
+
+### Corrigido
+- Correção no arquivo main.go para compatibilidade com a estrutura de comandos
+- Ajustes nas referências a constantes de complexidade de movimento
+- Validação aprimorada das configurações antes da compressão
+- Resolução de problemas na interface entre os componentes de análise e compressão
+- Corrigidos vários problemas de tipos e inconsistências nas APIs
+
+### Melhorado
+- Atualização da documentação para incluir informações sobre o Sprint 4
+- Maior estabilidade na compilação e execução
+- Melhoria na detecção de erros e nas mensagens de feedback ao usuário
+- Código refatorado para melhor legibilidade e manutenção
+
+## [0.3.0] - Sprint 3 - Interface e Experiência do Usuário
+
+### Adicionado
+- Sistema avançado de relatórios com detalhes completos da compressão
+- Geração de relatório em arquivo de texto para cada compressão
+- Pontuação de desempenho da compressão (0-100)
+- Estimativa de qualidade visual com descrições significativas
+- Dicas personalizadas de otimização baseadas no resultado da compressão
+- Cálculo de tempo economizado em transferências
+- Interface colorida no terminal com suporte a emojis
+- Barra de progresso aprimorada com estimativas de tempo restante
+- Formatação amigável de tamanhos de arquivo e taxas de bits
+- Indicadores visuais para tipos de conteúdo e complexidade de movimento
+
+### Melhorado
+- Logger com cores ANSI e diferentes níveis de informação
+- Exibição de informações com seções e formatação clara
+- Estrutura de comandos para exibição mais organizada
+- Makefile com suporte a compilação multiplataforma
+- Sistema de empacotamento para distribuição em diferentes sistemas
+- Instalação simplificada via `go install`
+- Documentação para desenvolvedores e usuários finais
+
 ## [0.2.0] - Sprint 3 - Motor de Compressão Inteligente
 
 ### Adicionado

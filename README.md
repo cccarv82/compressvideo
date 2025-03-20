@@ -20,13 +20,37 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - ✅ Sprint 1: CLI interface and project structure
 - ✅ Sprint 2: Video analysis and content detection
 - ✅ Sprint 3: Compression engine
-- ⬜ Sprint 4: User interface improvements
+- ✅ Sprint 4: User interface improvements and bug fixes
 - ⬜ Sprint 5: Testing and finalization
 
 ## Installation
 
+There are multiple ways to install CompressVideo:
+
+### Using Go Install (Recommended)
+
 ```bash
 go install github.com/cccarv82/compressvideo@latest
+```
+
+### From Binary Releases
+
+1. Download the appropriate binary for your platform from the [Releases](https://github.com/cccarv82/compressvideo/releases) page
+2. Extract the archive: `tar -xzf compressvideo-X.Y.Z-PLATFORM.tar.gz` (or unzip for Windows)
+3. Move the binary to a location in your PATH
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/cccarv82/compressvideo.git
+cd compressvideo
+
+# Build for your platform
+make build
+
+# Or build for all supported platforms
+make cross-build
 ```
 
 ## Usage
@@ -137,3 +161,28 @@ These free resources provide excellent test videos for compression applications:
 ## License
 
 MIT 
+
+## Compression Reports
+
+CompressVideo generates detailed compression reports for each operation:
+
+- Comprehensive analysis of input and output files
+- Visual quality estimation with descriptive ratings
+- Performance score (0-100) rating the compression effectiveness
+- Personalized optimization tips based on content analysis
+- Estimated time savings in file transfers
+- Before/after comparison of key metrics
+
+Reports are displayed in the terminal and saved as text files alongside the compressed video file.
+
+## User Interface
+
+CompressVideo provides a rich command-line interface:
+
+- Colored output with clear formatting
+- Progress bar with real-time estimates
+- Section-based output organization
+- Visual indicators for content types and complexity
+- Emoji-based indicators for quick visual recognition
+- Detailed logs for diagnostic information
+- Human-readable formatting for technical information 
