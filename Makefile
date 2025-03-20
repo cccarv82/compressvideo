@@ -35,22 +35,22 @@ benchmark-test:
 # Regular build for current platform
 build:
 	@echo "Building $(BINARY_NAME) v$(VERSION)..."
-	go build $(LDFLAGS) -o $(BINARY_NAME) cmd/compressvideo/main.go
+	go build $(LDFLAGS) -o $(BINARY_NAME) main.go
 
 # Build for all platforms 
 cross-build: clean
 	@echo "Building $(BINARY_NAME) v$(VERSION) for multiple platforms..."
 	@mkdir -p $(BIN_DIR)
 	@echo "Building for Linux (amd64)..."
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 cmd/compressvideo/main.go
+	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-amd64 main.go
 	@echo "Building for Linux (arm64)..."
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 cmd/compressvideo/main.go
+	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-linux-arm64 main.go
 	@echo "Building for macOS (amd64)..."
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-darwin-amd64 cmd/compressvideo/main.go
+	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-darwin-amd64 main.go
 	@echo "Building for macOS (arm64)..."
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-darwin-arm64 cmd/compressvideo/main.go
+	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-darwin-arm64 main.go
 	@echo "Building for Windows (amd64)..."
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-windows-amd64.exe cmd/compressvideo/main.go
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o $(BIN_DIR)/$(BINARY_NAME)-windows-amd64.exe main.go
 	@echo "Cross-platform builds complete."
 
 # Create release packages
