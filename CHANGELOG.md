@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1] - Melhorias nos Testes e Documentação
+
+### Adicionado
+- Script de download de vídeos de teste em `scripts/download_test_videos.py`
+- Pasta `data/` para armazenar vídeos de teste (excluída do controle de versão)
+- Comando `make download-test-videos` para facilitar o download
+- Documentação expandida sobre recursos de teste
+
+### Melhorado
+- Documentação de recursos para desenvolvedores
+- Organização do projeto com diretório dedicado para dados de teste
+
 ## [0.1.0] - Sprint 2 - Análise de Vídeo
 
 ### Adicionado

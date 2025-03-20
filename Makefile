@@ -1,4 +1,4 @@
-.PHONY: build test clean all run
+.PHONY: build test clean all run download-test-videos
 
 # Build variables
 BINARY_NAME=compressvideo
@@ -29,12 +29,18 @@ run: build
 	@echo "Running ${BINARY_NAME}..."
 	./${BINARY_NAME}
 
+download-test-videos:
+	@echo "Downloading test videos to data/ directory..."
+	@mkdir -p data
+	@python3 scripts/download_test_videos.py
+
 help:
 	@echo "Available commands:"
-	@echo "  make build      - Build the application"
-	@echo "  make build-all  - Build for multiple platforms"
-	@echo "  make test       - Run tests"
-	@echo "  make clean      - Clean up build artifacts"
-	@echo "  make run        - Build and run the application"
-	@echo "  make all        - Clean, test, and build"
-	@echo "  make help       - Show this help message" 
+	@echo "  make build                - Build the application"
+	@echo "  make build-all            - Build for multiple platforms"
+	@echo "  make test                 - Run tests"
+	@echo "  make clean                - Clean up build artifacts"
+	@echo "  make run                  - Build and run the application"
+	@echo "  make download-test-videos - Download sample videos for testing"
+	@echo "  make all                  - Clean, test, and build"
+	@echo "  make help                 - Show this help message" 

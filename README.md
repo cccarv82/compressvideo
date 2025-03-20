@@ -64,6 +64,44 @@ CompressVideo analyzes your video to determine:
 
 Based on this analysis, it automatically selects the optimal compression settings to maintain visual quality while maximizing file size reduction.
 
+## Test Videos
+
+For development and testing purposes, you can use the included script to download sample videos:
+
+```bash
+# Download all test videos (requires Python 3)
+./scripts/download_test_videos.py
+
+# Or use the make command
+make download-test-videos
+```
+
+This will download several test videos to the `data/` directory, including:
+- Car detection video (768x432, similar to animation)
+- People detection footage (768x432, similar to gaming)
+- Face demographics walking video (768x432, documentary-like)
+- Classroom/screencast video (1920x1080, high-resolution)
+
+All test videos are sourced from the [Intel IoT DevKit sample videos](https://github.com/intel-iot-devkit/sample-videos) repository, which provides free sample videos for testing.
+
+### Other Free Testing Resources
+
+These free resources provide excellent test videos for compression applications:
+
+1. **Xiph.org Video Test Media**: [https://media.xiph.org/video/derf/](https://media.xiph.org/video/derf/)
+   - High-quality, uncompressed video sequences specifically designed for testing
+
+2. **Pexels Free Stock Videos**: [https://www.pexels.com/videos/](https://www.pexels.com/videos/)
+   - Royalty-free videos for testing different content types
+
+3. **Coverr**: [https://coverr.co/](https://coverr.co/)
+   - Free motion videos, useful for testing compression of cinematic content
+
+4. **Sample-Videos.com**: [https://sample-videos.com/](https://sample-videos.com/)
+   - Various sample videos in different formats and resolutions
+
+**Note**: The `data/` directory is excluded from version control in `.gitignore`.
+
 ## Requirements
 
 - Go 1.18 or higher
