@@ -377,41 +377,33 @@ func (ca *ContentAnalyzer) calculateOptimalBitrate(videoFile *ffmpeg.VideoFile, 
 	return int64(adjustedBitrate)
 }
 
-// estimateCompressionPotential estimates how much the video can be compressed
+// estimateCompressionPotential estimates the potential compression percentage
 func (ca *ContentAnalyzer) estimateCompressionPotential(videoFile *ffmpeg.VideoFile, analysis *VideoAnalysis) int {
-	// Cannot estimate if we don't have original bitrate
-	if videoFile.VideoInfo.Bitrate <= 0 {
-		// Make a rougher estimate based on content type
-		switch analysis.ContentType {
-		case ContentTypeScreencast:
-			return 80 // Screencasts typically compress very well
-		case ContentTypeAnimation:
-			return 70 // Animation also compresses well
-		case ContentTypeGaming:
-			return 50 // Gaming varies widely
-		case ContentTypeSportsAction:
-			return 40 // Sports action is hard to compress well
-		default:
-			return 50 // Default to 50% for unknown types
+	// If we can't determine bitrate, make an estimate based on other factors
+	if videoFile.VideoInfo.BitRate <= 0 {
+		// Estimate based on content type and resolution
+		if analysis.IsUHDContent { // 4K
+			return 50
+		} else if analysis.IsHDContent { // HD
+			return 60
 		}
+		return 65 // SD
 	}
 	
-	// Calculate compression ratio
-	compressionRatio := float64(videoFile.VideoInfo.Bitrate) / float64(analysis.OptimalBitrate)
+	// Calculate based on optimal bitrate vs current bitrate
+	compressionRatio := float64(videoFile.VideoInfo.BitRate) / float64(analysis.OptimalBitrate)
 	
-	// Estimate the percentage savings
-	potentialSavings := (1.0 - (1.0 / compressionRatio)) * 100
+	// Convert to percentage potential
+	potential := int((1.0 - (1.0 / compressionRatio)) * 100)
 	
-	// Ensure the result is reasonable
-	if potentialSavings < 0 {
-		// If original is already well-compressed, suggest modest gain
-		return 10
-	} else if potentialSavings > 90 {
-		// Cap at 90% to avoid over-promising
-		return 90
+	// Clamp value between 0 and 95%
+	if potential < 0 {
+		potential = 0
+	} else if potential > 95 {
+		potential = 95
 	}
 	
-	return int(potentialSavings)
+	return potential
 }
 
 // containsAny checks if a string contains any of the given substrings
@@ -647,12 +639,12 @@ func (ca *ContentAnalyzer) setAudioSettings(settings map[string]string, analysis
 	settings["audio_codec"] = "copy"
 	
 	// If the audio bitrate is very high, we might want to re-encode
-	if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].Bitrate > 128000 && 
+	if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].BitRate > 128000 && 
 	   (analysis.ContentType == ContentTypeScreencast || analysis.ContentType == ContentTypeAnimation) {
 		// Use AAC with a reasonable bitrate for screencast/animation
 		settings["audio_codec"] = "aac"
 		settings["audio_bitrate"] = "128k"
-	} else if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].Bitrate > 192000 && 
+	} else if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].BitRate > 192000 && 
 			  (analysis.ContentType == ContentTypeLiveAction || analysis.ContentType == ContentTypeDocumentary) {
 		// Use a higher bitrate for content where audio quality is more important
 		settings["audio_codec"] = "aac"

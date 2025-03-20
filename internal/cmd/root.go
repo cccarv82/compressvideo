@@ -4,6 +4,7 @@ package cmd
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -34,17 +35,20 @@ var (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "compressvideo",
-	Short: "A smart video compression tool",
-	Long: `CompressVideo - Intelligent video compression
+	Short: "Um compressor de vídeo simples",
+	Long: `CompressVideo é uma ferramenta de linha de comando para comprimir vídeos
+usando o FFmpeg com configurações ótimas para diversos casos de uso.
 
-A smart video compression CLI tool that reduces video file sizes
-while maintaining the highest possible visual quality.
-
-Examples:
-  compressvideo -i input.mp4
-  compressvideo -i input.mp4 -o output.mp4 -q 4 -p thorough -f -v`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return process(cmd, args)
+O aplicativo tenta fornecer um bom equilíbrio entre qualidade e tamanho do arquivo,
+escolhendo automaticamente os melhores parâmetros de compressão para cada vídeo.`,
+	Run: func(cmd *cobra.Command, args []string) {
+		logger = util.NewLogger(verbose)
+		
+		// Executar a compressão
+		if err := executeCompression(); err != nil {
+			logger.Error("Erro: %v", err)
+			os.Exit(1)
+		}
 	},
 }
 
@@ -66,6 +70,9 @@ func init() {
 	rootCmd.Flags().StringVarP(&preset, "preset", "p", "balanced", "Compression preset (fast, balanced, thorough)")
 	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file if it exists")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show verbose output")
+	
+	// Add repair-ffmpeg command
+	rootCmd.AddCommand(repairFFmpegCmd)
 }
 
 // validateFlags validates the input flags
@@ -154,11 +161,18 @@ func process(cmd *cobra.Command, args []string) error {
 	
 	// Initialize FFmpeg
 	logger.Info("Initializing FFmpeg...")
-	ffmpegUtil, err := ffmpeg.NewFFmpeg(logger)
+	ffmpegInfo, err := util.EnsureFFmpeg(logger)
 	if err != nil {
 		logger.Error("Failed to initialize FFmpeg: %v", err)
 		return err
 	}
+	
+	// Usar o caminho do FFmpeg obtido
+	logger.Debug("Using FFmpeg path: %s", ffmpegInfo.Path)
+	logger.Debug("Using FFprobe path: %s", ffmpegInfo.FFprobePath)
+
+	// Criar uma instância de FFmpeg
+	ffmpegUtil := ffmpeg.NewFFmpeg("", "", &ffmpeg.Options{}, logger)
 	
 	// Get video information
 	logger.Info("Extracting video metadata...")
@@ -286,27 +300,29 @@ func displayVideoInfo(videoFile *ffmpeg.VideoFile) {
 	logger.Field("Size", "%s", sizeStr)
 	logger.Field("Duration", "%.2f seconds", videoFile.Duration)
 	
-	if videoFile.Bitrate > 0 {
-		bitrateStr := formatBitrate(videoFile.Bitrate)
-		logger.Field("Overall Bitrate", "%s", bitrateStr)
+	if videoFile.BitRate > 0 {
+		bitrateStr := formatBitrate(videoFile.BitRate)
+		logger.Field("Bitrate Total", "%s", bitrateStr)
+	} else {
+		logger.Field("Bitrate Total", "Desconhecido")
 	}
 	
-	// Video stream info
-	logger.Info("\nVideo Stream:")
-	logger.Field("  Codec", "%s", videoFile.VideoInfo.Codec)
-	logger.Field("  Resolution", "%dx%d", videoFile.VideoInfo.Width, videoFile.VideoInfo.Height)
-	logger.Field("  Frame Rate", "%.2f fps", videoFile.VideoInfo.FPS)
+	// Video stream
+	logger.Section("Stream de Vídeo")
+	logger.Field("Codec", "%s", videoFile.VideoInfo.Codec)
+	logger.Field("Resolução", "%dx%d", videoFile.VideoInfo.Width, videoFile.VideoInfo.Height)
+	logger.Field("FPS", "%.2f", videoFile.VideoInfo.FPS)
 	
-	if videoFile.VideoInfo.Bitrate > 0 {
-		bitrateStr := formatBitrate(videoFile.VideoInfo.Bitrate)
-		logger.Field("  Video Bitrate", "%s", bitrateStr)
+	if videoFile.VideoInfo.BitRate > 0 {
+		bitrateStr := formatBitrate(videoFile.VideoInfo.BitRate)
+		logger.Field("Bitrate do Vídeo", "%s", bitrateStr)
 	}
 	
-	logger.Field("  Pixel Format", "%s", videoFile.VideoInfo.PixelFormat)
+	logger.Field("Pixel Format", "%s", videoFile.VideoInfo.PixelFormat)
 	if videoFile.VideoInfo.ProfileLevel != "" {
-		logger.Field("  Profile", "%s", videoFile.VideoInfo.ProfileLevel)
+		logger.Field("Profile", "%s", videoFile.VideoInfo.ProfileLevel)
 	}
-	logger.Field("  HDR", "%t", videoFile.VideoInfo.IsHDR)
+	logger.Field("HDR", "%t", videoFile.VideoInfo.IsHDR)
 	
 	// Audio stream info
 	if len(videoFile.AudioInfo) > 0 {
@@ -317,8 +333,8 @@ func displayVideoInfo(videoFile *ffmpeg.VideoFile) {
 			logger.Field("    Channels", "%d", audio.Channels)
 			logger.Field("    Sample Rate", "%d Hz", audio.SampleRate)
 			
-			if audio.Bitrate > 0 {
-				bitrateStr := formatBitrate(audio.Bitrate)
+			if audio.BitRate > 0 {
+				bitrateStr := formatBitrate(audio.BitRate)
 				logger.Field("    Bitrate", "%s", bitrateStr)
 			}
 			
@@ -439,4 +455,128 @@ func getFileExtension(filename string) string {
 		}
 	}
 	return ""
+}
+
+// repairFFmpegCmd represents the command to repair the FFmpeg installation
+var repairFFmpegCmd = &cobra.Command{
+	Use:   "repair-ffmpeg",
+	Short: "Repair FFmpeg installation",
+	Long:  `Repair the FFmpeg installation used by CompressVideo.
+
+This command is useful when you encounter issues with FFmpeg, such as:
+- "Failed to get video information" errors
+- Exit status errors with FFmpeg or FFprobe
+- Missing codecs or format support
+
+The repair process will:
+1. Remove the existing FFmpeg installation
+2. Download a fresh copy of FFmpeg
+3. Verify the installation works correctly`,
+	
+	Run: func(cmd *cobra.Command, args []string) {
+		logger = util.NewLogger(true) // Force verbose for repair
+		
+		logger.Title("CompressVideo - FFmpeg Repair Tool")
+		logger.Info("Starting FFmpeg repair process...")
+		
+		info, err := util.RepairFFmpeg(logger)
+		if err != nil {
+			logger.Fatal("Failed to repair FFmpeg: %v", err)
+		}
+		
+		// Test the repaired FFmpeg with a simple command
+		logger.Info("Testing repaired FFmpeg...")
+		testCmd := exec.Command(info.Path, "-version")
+		output, err := testCmd.CombinedOutput()
+		if err != nil {
+			logger.Error("FFmpeg test failed: %v", err)
+			logger.Error("Output: %s", string(output))
+			os.Exit(1)
+		}
+		
+		if info.FFprobePath != "" {
+			testProbeCmd := exec.Command(info.FFprobePath, "-version")
+			probeOutput, err := testProbeCmd.CombinedOutput()
+			if err != nil {
+				logger.Error("FFprobe test failed: %v", err)
+				logger.Error("Output: %s", string(probeOutput))
+				os.Exit(1)
+			}
+		}
+		
+		logger.Success("FFmpeg repair completed successfully!")
+		logger.Info("FFmpeg version: %s", info.Version)
+		logger.Info("FFmpeg path: %s", info.Path)
+		
+		if info.FFprobePath != "" {
+			logger.Info("FFprobe path: %s", info.FFprobePath)
+		}
+		
+		logger.Info("\nYou can now use CompressVideo normally.")
+	},
+}
+
+func executeCompression() error {
+	// Configure logger
+	logger = util.NewLogger(verbose)
+	logger.Title("CompressVideo v%s", util.Version)
+	logger.Info("Iniciando compressão de vídeo")
+	
+	// Validate input file
+	logger.Info("Arquivo de entrada: %s", inputFile)
+	
+	// If output file is not specified, use default naming
+	if outputFile == "" {
+		ext := filepath.Ext(inputFile)
+		outputFile = strings.TrimSuffix(inputFile, ext) + "-compressed" + ext
+	}
+	
+	logger.Info("Arquivo de saída: %s", outputFile)
+	
+	// Check if output file exists
+	if _, err := os.Stat(outputFile); err == nil && !force {
+		return fmt.Errorf("o arquivo de saída já existe. Use a flag -f para sobrescrever")
+	}
+	
+	// Set compression options
+	logger.Info("Qualidade: %d/5", quality)
+	logger.Info("Preset: %s", preset)
+	
+	// Create ffmpeg object
+	options := &ffmpeg.Options{
+		Quality: quality,
+		Preset:  preset,
+	}
+	
+	ff := ffmpeg.NewFFmpeg(inputFile, outputFile, options, logger)
+	if err := ff.Execute(); err != nil {
+		logger.Error("Falha na compressão: %v", err)
+		return err
+	}
+	
+	logger.Success("Compressão concluída com sucesso!")
+	
+	// Exibir estatísticas de compressão
+	inputStat, err := os.Stat(inputFile)
+	if err != nil {
+		logger.Error("Erro ao obter informações do arquivo de entrada: %v", err)
+		return nil // Não retorna erro para não interromper o fluxo
+	}
+	inputSize := inputStat.Size()
+
+	outputStat, err := os.Stat(outputFile)
+	if err != nil {
+		logger.Error("Erro ao obter informações do arquivo de saída: %v", err)
+		return nil // Não retorna erro para não interromper o fluxo
+	}
+	outputSize := outputStat.Size()
+
+	if outputSize > 0 && inputSize > 0 {
+		savings := 100.0 - (float64(outputSize) / float64(inputSize) * 100.0)
+		logger.Info("Tamanho original: %s", util.FormatSize(inputSize))
+		logger.Info("Tamanho final: %s", util.FormatSize(outputSize))
+		logger.Info("Redução: %.1f%% (economia de %s)", savings, util.FormatSize(inputSize-outputSize))
+	}
+
+	return nil
 } 

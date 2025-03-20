@@ -111,7 +111,7 @@ func (rg *ReportGenerator) generateCompressionTips(report *Report) []string {
 	}
 	
 	// Add tip about audio if original has high audio bitrate
-	if len(report.OriginalVideo.AudioInfo) > 0 && report.OriginalVideo.AudioInfo[0].Bitrate > 192000 {
+	if len(report.OriginalVideo.AudioInfo) > 0 && report.OriginalVideo.AudioInfo[0].BitRate > 192000 {
 		tips = append(tips, "Audio is using a high bitrate. Consider using 128kbps AAC for most content, or 192kbps for music videos.")
 	}
 	

@@ -17,6 +17,7 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - Cross-platform support (Linux, macOS, Windows)
 - Comprehensive testing and benchmarking
 - **Automatic FFmpeg download** if not installed on the system
+- **FFmpeg repair tool** to fix installation issues
 
 ## Implementation Status
 
@@ -26,8 +27,9 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - ✅ Sprint 4: User interface improvements and bug fixes
 - ✅ Sprint 5: Testing and finalization
 - ✅ Extra: Automatic FFmpeg integration
+- ✅ Extra: FFmpeg repair tools and enhanced robustness
 
-All planned sprints completed! CompressVideo v1.0.0 is now ready for production use.
+CompressVideo v1.2.0 is now available with improved robustness and reliability!
 
 ## Installation
 
@@ -83,6 +85,12 @@ With options:
 compressvideo -i input.mp4 -o output.mp4 -q 4 -p thorough
 ```
 
+Repairing FFmpeg installation:
+
+```bash
+compressvideo repair-ffmpeg
+```
+
 ### Available Options
 
 - `-i, --input`: Path to the video file to compress (required)
@@ -92,6 +100,11 @@ compressvideo -i input.mp4 -o output.mp4 -q 4 -p thorough
 - `-f, --force`: Overwrite output file if it exists
 - `-v, --verbose`: Show detailed information during the process
 - `-h, --help`: Show detailed help
+
+### Available Commands
+
+- `version`: Display version information
+- `repair-ffmpeg`: Repair FFmpeg installation issues
 
 ## Content Analysis
 

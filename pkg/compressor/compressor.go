@@ -175,15 +175,22 @@ func (vc *VideoCompressor) adjustSettingsForPreset(settings map[string]string, p
 func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {
 	vc.Logger.Debug("Starting single-process compression")
 	
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
 	// Build FFmpeg command arguments
 	args := vc.BuildFFmpegArgs(inputFile, outputFile, settings)
 	
 	// Log the command
-	cmdStr := fmt.Sprintf("%s %s", vc.FFmpeg.FFmpegPath, strings.Join(args, " "))
+	cmdStr := fmt.Sprintf("%s %s", ffmpegPath, strings.Join(args, " "))
 	vc.Logger.Debug("Running FFmpeg command: %s", cmdStr)
 	
 	// Create command
-	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	cmd := exec.Command(ffmpegPath, args...)
 	
 	// Get video duration for progress calculation
 	videoFile, err := vc.FFmpeg.GetVideoInfo(inputFile)
@@ -381,6 +388,13 @@ func (vc *VideoCompressor) compressVideoParallel(inputFile, outputFile string, s
 func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDuration float64, numSegments int) ([]string, error) {
 	segments := make([]string, numSegments)
 	
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
 	for i := 0; i < numSegments; i++ {
 		startTime := float64(i) * segmentDuration
 		outPath := filepath.Join(segmentDir, fmt.Sprintf("segment_%04d.mp4", i))
@@ -395,7 +409,7 @@ func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDurat
 			"-y", outPath,
 		}
 		
-		cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+		cmd := exec.Command(ffmpegPath, args...)
 		vc.Logger.Debug("Splitting segment %d: %s", i, strings.Join(cmd.Args, " "))
 		
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -408,11 +422,18 @@ func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDurat
 
 // compressSegment compresses a single video segment
 func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, settings map[string]string, progress progressReporter) error {
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
 	// Build FFmpeg command
 	args := vc.BuildFFmpegArgs(inputFile, outputFile, settings)
 	
 	// Run FFmpeg
-	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	cmd := exec.Command(ffmpegPath, args...)
 	
 	// Get video duration for progress calculation
 	videoFile, err := vc.FFmpeg.GetVideoInfo(inputFile)
@@ -479,6 +500,13 @@ func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, setting
 
 // mergeSegments merges multiple video segments into one output file
 func (vc *VideoCompressor) mergeSegments(listFile, outputFile, codec string) error {
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
 	// Use FFmpeg's concat demuxer to merge segments
 	args := []string{
 		"-f", "concat",
@@ -488,7 +516,7 @@ func (vc *VideoCompressor) mergeSegments(listFile, outputFile, codec string) err
 		"-y", outputFile,
 	}
 	
-	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	cmd := exec.Command(ffmpegPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to merge segments: %w\nOutput: %s", err, string(output))
@@ -642,4 +670,73 @@ type segmentProgressTracker struct {
 
 func (spt *segmentProgressTracker) reportProgress(progress int) {
 	spt.progressChan <- progress
+}
+
+func (vc *VideoCompressor) compressVideoWithTwoPass(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {
+	vc.Logger.Debug("Starting two-pass compression")
+	
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
+	// Build FFmpeg arguments for both passes
+	firstPassArgs := append(vc.BuildFFmpegArgs(inputFile, "NUL", settings), "-pass", "1", "-f", "null", "-")
+	
+	// Modify for macOS/Linux
+	if runtime.GOOS != "windows" {
+		firstPassArgs = append(vc.BuildFFmpegArgs(inputFile, "/dev/null", settings), "-pass", "1", "-f", "null", "/dev/null")
+	}
+	
+	// Run first pass
+	vc.Logger.Debug("Running first pass compression")
+	cmd := exec.Command(ffmpegPath, firstPassArgs...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("FFmpeg first pass error: %w\nOutput: %s", err, string(output))
+	}
+	
+	// Run second pass
+	secondPassArgs := append(vc.BuildFFmpegArgs(inputFile, outputFile, settings), "-pass", "2")
+	vc.Logger.Debug("Running second pass compression")
+	cmd = exec.Command(ffmpegPath, secondPassArgs...)
+	output, err = cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("FFmpeg second pass error: %w\nOutput: %s", err, string(output))
+	}
+	
+	return nil
+}
+
+func (vc *VideoCompressor) compressVideoSegment(inputFile, outputFile string, startTime, duration float64, settings map[string]string) error {
+	vc.Logger.Debug("Compressing segment: %s from %.2fs for %.2fs", inputFile, startTime, duration)
+	
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	ffmpegPath := ffmpegInfo.Path
+	
+	// Add segment-specific arguments
+	segmentArgs := []string{
+		"-ss", fmt.Sprintf("%.3f", startTime),
+		"-t", fmt.Sprintf("%.3f", duration),
+	}
+	
+	// Build the FFmpeg command
+	args := append(segmentArgs, vc.BuildFFmpegArgs(inputFile, outputFile, settings)...)
+	
+	// Execute command
+	vc.Logger.Debug("Running FFmpeg segment command: %s %s", ffmpegPath, strings.Join(args, " "))
+	cmd := exec.Command(ffmpegPath, args...)
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to compress segment: %w\nOutput: %s", err, string(output))
+	}
+	
+	return nil
 } 

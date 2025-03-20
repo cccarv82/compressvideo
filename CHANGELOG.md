@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0] - Robustez e Confiabilidade
+
+### Adicionado
+- Comando `repair-ffmpeg` para consertar instalações problemáticas do FFmpeg
+- Suporte melhorado para sistemas Windows, incluindo tratamento especial para caminhos com espaços
+- Múltiplas fontes de download para o FFmpeg em caso de falha
+- Sistema de reparo automático para detecção de problemas com FFmpeg
+
+### Melhorado
+- Tratamento avançado de erros no FFmpeg com mensagens mais informativas
+- Melhor detecção de problemas específicos do Windows
+- Verificação de integridade dos arquivos baixados
+- Sistema de tentativas múltiplas para download e extração
+- Manipulação mais robusta de diferentes formatos de arquivo (ZIP, TAR.GZ, TAR.XZ)
+- Interface de usuário com mensagens mais claras sobre problemas e soluções
+
 ## [1.1.0] - Aprimoramento de Usabilidade
 
 ### Adicionado

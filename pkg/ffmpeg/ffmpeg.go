@@ -1,69 +1,84 @@
 package ffmpeg
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 
 	"github.com/cccarv82/compressvideo/pkg/util"
 )
 
-// FFmpeg represents a wrapper around the ffmpeg command-line tool
-type FFmpeg struct {
-	FFmpegPath  string
-	FFprobePath string
-	Logger      *util.Logger
+// VideoInfo contains information about a video file
+type VideoInfo struct {
+	Width      int     // Width in pixels
+	Height     int     // Height in pixels
+	FrameRate  float64 // Frame rate in frames per second
+	Duration   float64 // Duration in seconds
+	BitRate    int64   // Bit rate in bits per second
+	CodecName  string  // Codec name
+	SizeBits   int64   // Size in bits
+	Resolution string  // Resolution as a string (e.g. "1920x1080")
 }
 
-// NewFFmpeg creates a new FFmpeg wrapper instance
-func NewFFmpeg(logger *util.Logger) (*FFmpeg, error) {
-	// Verificar se o FFmpeg está instalado ou pode ser baixado
-	ffmpegInfo, err := util.EnsureFFmpeg(logger)
-	if err != nil {
-		return nil, fmt.Errorf("falha ao garantir FFmpeg: %w", err)
-	}
-	
-	if !ffmpegInfo.Available {
-		return nil, fmt.Errorf("FFmpeg não encontrado e não foi possível baixá-lo")
-	}
-	
-	// A versão baixada inclui apenas ffmpeg, não ffprobe
-	// Se é uma versão baixada, usamos ffmpeg para todas as operações 
-	ffprobePath := ffmpegInfo.Path
-	if !ffmpegInfo.IsDownloaded {
-		// Se é instalado pelo sistema, procurar o ffprobe também
-		path, err := exec.LookPath("ffprobe")
-		if err != nil {
-			logger.Warning("ffprobe não encontrado, algumas funcionalidades podem ficar limitadas")
-			// Usar ffmpeg no lugar, para operações básicas
-			ffprobePath = ffmpegInfo.Path
-		} else {
-			ffprobePath = path
-		}
-	}
-	
-	logger.Info("Usando FFmpeg: %s", ffmpegInfo.Path)
-	if ffprobePath != ffmpegInfo.Path {
-		logger.Info("Usando FFprobe: %s", ffprobePath)
-	}
+// EncodingSettings contains settings for encoding
+type EncodingSettings struct {
+	VideoCodec    string // Video codec to use (e.g. libx264)
+	CRF           int    // Constant Rate Factor (quality)
+	Preset        string // Compression preset (e.g. medium, slow)
+	MaxWidth      int    // Maximum width for scaling
+	MaxHeight     int    // Maximum height for scaling
+	TargetBitrate int64  // Target bitrate in bits per second
+}
 
+// Options contains options for FFmpeg compression
+type Options struct {
+	Quality int    // Quality level (1-5, 1=max compression, 5=max quality)
+	Preset  string // Preset (fast, balanced, thorough)
+}
+
+// FFmpeg represents an FFmpeg instance
+type FFmpeg struct {
+	InputFile   string    // Input file path
+	OutputFile  string    // Output file path
+	Options     *Options  // Compression options
+	Logger      *util.Logger // Logger
+}
+
+// NewFFmpeg cria uma nova instância do FFmpeg
+func NewFFmpeg(inputFile, outputFile string, options *Options, logger *util.Logger) *FFmpeg {
+	if options == nil {
+		options = DefaultOptions()
+	}
+	
 	return &FFmpeg{
-		FFmpegPath:  ffmpegInfo.Path,
-		FFprobePath: ffprobePath,
-		Logger:      logger,
-	}, nil
+		InputFile:  inputFile,
+		OutputFile: outputFile,
+		Options:    options,
+		Logger:     logger,
+	}
 }
 
 // GetVideoInfo retrieves detailed information about a video file using ffprobe
 func (f *FFmpeg) GetVideoInfo(filePath string) (*VideoFile, error) {
 	f.Logger.Debug("Getting video info for: %s", filePath)
 
+	// Obter o caminho para o FFprobe
+	info, err := util.FindFFmpeg()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
+	
+	ffprobePath := info.FFprobePath
+
 	// Run ffprobe to get JSON output with all stream info
 	cmd := exec.Command(
-		f.FFprobePath,
+		ffprobePath,
 		"-v", "quiet",
 		"-print_format", "json",
 		"-show_format",
@@ -105,7 +120,7 @@ func (f *FFmpeg) GetVideoInfo(filePath string) (*VideoFile, error) {
 	}
 	if bitrateStr, ok := ffprobeOutput.Format["bit_rate"].(string); ok {
 		bitrate, _ := strconv.ParseInt(bitrateStr, 10, 64)
-		videoFile.Bitrate = bitrate
+		videoFile.BitRate = bitrate
 	}
 
 	// Process each stream
@@ -157,7 +172,7 @@ func (f *FFmpeg) GetVideoInfo(filePath string) (*VideoFile, error) {
 			// Extract video bitrate
 			if bitrateStr, ok := stream["bit_rate"].(string); ok {
 				bitrate, _ := strconv.ParseInt(bitrateStr, 10, 64)
-				videoInfo.Bitrate = bitrate
+				videoInfo.BitRate = bitrate
 			}
 			
 			// Check for B-frames using profile
@@ -208,7 +223,7 @@ func (f *FFmpeg) GetVideoInfo(filePath string) (*VideoFile, error) {
 			// Extract bitrate
 			if bitrateStr, ok := stream["bit_rate"].(string); ok {
 				bitrate, _ := strconv.ParseInt(bitrateStr, 10, 64)
-				audioInfo.Bitrate = bitrate
+				audioInfo.BitRate = bitrate
 			}
 			
 			// Extract language
@@ -228,9 +243,17 @@ func (f *FFmpeg) GetVideoInfo(filePath string) (*VideoFile, error) {
 
 // ExecuteCommand runs an FFmpeg command with the given arguments
 func (f *FFmpeg) ExecuteCommand(args []string) ([]byte, error) {
-	f.Logger.Debug("Executing FFmpeg command: %s %s", f.FFmpegPath, strings.Join(args, " "))
+	// Obter o caminho para o FFmpeg
+	info, err := util.FindFFmpeg()
+	if err != nil {
+		return nil, fmt.Errorf("erro ao encontrar FFmpeg: %v", err)
+	}
 	
-	cmd := exec.Command(f.FFmpegPath, args...)
+	ffmpegPath := info.Path
+	
+	f.Logger.Debug("Executing FFmpeg command: %s %s", ffmpegPath, strings.Join(args, " "))
+	
+	cmd := exec.Command(ffmpegPath, args...)
 	return cmd.CombinedOutput()
 }
 
@@ -328,4 +351,257 @@ func (f *FFmpeg) CalculateFrameComplexity(filePath string) (float64, error) {
 	f.Logger.Debug("Average frame complexity: %f", averageComplexity)
 	
 	return averageComplexity, nil
+}
+
+// Execute executa o processo de compressão de vídeo
+func (ffmpeg *FFmpeg) Execute() error {
+	// Verificar se o FFmpeg está instalado
+	_, err := util.EnsureFFmpeg(ffmpeg.Logger)
+	if err != nil {
+		ffmpeg.Logger.Error("Falha ao verificar FFmpeg: %v", err)
+		ffmpeg.Logger.Info("Tente executar 'compressvideo repair-ffmpeg' para corrigir problemas com o FFmpeg")
+		return fmt.Errorf("falha ao inicializar FFmpeg: %v", err)
+	}
+	
+	// Obter informações do vídeo original
+	video, err := ffmpeg.GetVideoInfo(ffmpeg.InputFile)
+	if err != nil {
+		// No Windows, erros com código hexadecimal podem indicar problemas com o FFprobe
+		if strings.Contains(err.Error(), "0x") || strings.Contains(err.Error(), "exit status") {
+			ffmpeg.Logger.Error("Erro ao executar FFprobe. Isso pode indicar um problema com a instalação do FFmpeg.")
+			ffmpeg.Logger.Info("Tente executar 'compressvideo repair-ffmpeg' para corrigir problemas com o FFmpeg")
+		}
+		return fmt.Errorf("falha ao obter informações do vídeo: %v", err)
+	}
+	
+	// Criar uma estrutura VideoInfo a partir do VideoFile para compatibilidade
+	videoInfo := &VideoInfo{
+		Width:      video.VideoInfo.Width,
+		Height:     video.VideoInfo.Height,
+		FrameRate:  video.VideoInfo.FPS,
+		Duration:   video.Duration,
+		BitRate:    video.BitRate,
+		CodecName:  video.VideoInfo.Codec,
+		Resolution: fmt.Sprintf("%dx%d", video.VideoInfo.Width, video.VideoInfo.Height),
+	}
+	
+	// Exibir informações do vídeo
+	ffmpeg.Logger.Info("Informações do vídeo:")
+	ffmpeg.Logger.Info("  Resolução: %dx%d", videoInfo.Width, videoInfo.Height)
+	ffmpeg.Logger.Info("  Codec: %s", videoInfo.CodecName)
+	ffmpeg.Logger.Info("  Duração: %.2f segundos", videoInfo.Duration)
+	if videoInfo.BitRate > 0 {
+		ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(videoInfo.BitRate)/1024/1024)
+	}
+	
+	// Calcular configurações de compressão com base na qualidade
+	settings := ffmpeg.calculateEncodingSettings(videoInfo, ffmpeg.Options.Quality)
+	
+	// Exibir configurações de compressão
+	ffmpeg.Logger.Info("Configurações de compressão:")
+	ffmpeg.Logger.Info("  Codec: %s", settings.VideoCodec)
+	ffmpeg.Logger.Info("  CRF: %d", settings.CRF)
+	ffmpeg.Logger.Info("  Preset: %s", settings.Preset)
+	if settings.MaxWidth > 0 || settings.MaxHeight > 0 {
+		ffmpeg.Logger.Info("  Escala: %dx%d", settings.MaxWidth, settings.MaxHeight)
+	}
+	ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(settings.TargetBitrate)/1024/1024)
+	
+	// Iniciar compressão
+	ffmpeg.Logger.Info("Iniciando compressão do vídeo...")
+	
+	// Construir comando FFmpeg
+	args := ffmpeg.buildFFmpegCommand(settings)
+	
+	// No Windows, garantir que caminhos com espaços sejam tratados corretamente
+	if runtime.GOOS == "windows" {
+		if strings.Contains(ffmpeg.InputFile, " ") {
+			args = append([]string{"-i", "\"" + ffmpeg.InputFile + "\""}, args[2:]...)
+		}
+		if strings.Contains(ffmpeg.OutputFile, " ") {
+			args[len(args)-1] = "\"" + ffmpeg.OutputFile + "\""
+		}
+	}
+	
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return fmt.Errorf("falha ao encontrar FFmpeg: %v", err)
+	}
+	
+	// Executar comando para compressão
+	cmd := exec.Command(ffmpegInfo.Path, args...)
+	
+	// Configurar captura de stderr para progresso
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("falha ao capturar saída de erro: %v", err)
+	}
+	
+	// Iniciar comando
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("falha ao iniciar FFmpeg: %v", err)
+	}
+	
+	// Mostrar progresso
+	progressTracker := util.NewProgressTracker(int64(videoInfo.Duration), "Comprimindo vídeo", ffmpeg.Logger)
+	
+	// Ler stderr para mostrar progresso
+	scanner := bufio.NewScanner(stderr)
+	for scanner.Scan() {
+		line := scanner.Text()
+		
+		// Procurar por informações de tempo
+		if strings.Contains(line, "time=") {
+			// Parse time
+			timeIndex := strings.Index(line, "time=")
+			if timeIndex >= 0 {
+				timeStr := line[timeIndex+5 : timeIndex+16] // formato: HH:MM:SS.ms
+				currentTime := parseFFmpegTime(timeStr)
+				if currentTime > 0 {
+					progressTracker.Update(int64(currentTime))
+				}
+			}
+		}
+		
+		// Mostrar erro detalhado em modo verbose
+		if ffmpeg.Logger.IsVerbose() && strings.Contains(strings.ToLower(line), "error") {
+			ffmpeg.Logger.Debug("FFmpeg: %s", line)
+		}
+	}
+	
+	// Aguardar comando finalizar
+	err = cmd.Wait()
+	if err != nil {
+		return fmt.Errorf("FFmpeg falhou: %v", err)
+	}
+	
+	progressTracker.Finish()
+	
+	// Verificar se o arquivo de saída foi criado
+	if _, err := os.Stat(ffmpeg.OutputFile); os.IsNotExist(err) {
+		return fmt.Errorf("falha ao criar arquivo de saída")
+	}
+	
+	return nil
+}
+
+// DefaultOptions returns default options
+func DefaultOptions() *Options {
+	return &Options{
+		Quality: 3,        // Balanced quality by default
+		Preset:  "balanced", // Balanced preset by default
+	}
+}
+
+// Analisar tempo do FFmpeg (formato HH:MM:SS.ms)
+func parseFFmpegTime(timeStr string) float64 {
+	parts := strings.Split(timeStr, ":")
+	if len(parts) != 3 {
+		return 0
+	}
+	
+	hours, _ := strconv.ParseFloat(parts[0], 64)
+	minutes, _ := strconv.ParseFloat(parts[1], 64)
+	seconds, _ := strconv.ParseFloat(parts[2], 64)
+	
+	return hours*3600 + minutes*60 + seconds
+}
+
+// Calcula as configurações ideais para codificação
+func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *EncodingSettings {
+	settings := &EncodingSettings{}
+	
+	// Codec padrão é sempre H.264 por compatibilidade
+	settings.VideoCodec = "libx264"
+	
+	// Controle de qualidade baseado na opção escolhida (1-5)
+	switch quality {
+	case 1: // Máxima compressão
+		settings.CRF = 28
+		settings.Preset = "faster"
+		settings.TargetBitrate = 1000000 // 1 Mbps
+		// Para máxima compressão, podemos reduzir a resolução
+		if video.Height > 720 {
+			settings.MaxHeight = 720
+			settings.MaxWidth = 0 // Manter proporção
+		}
+	case 2: // Alta compressão
+		settings.CRF = 26
+		settings.Preset = "medium"
+		settings.TargetBitrate = 2000000 // 2 Mbps
+		if video.Height > 1080 {
+			settings.MaxHeight = 1080
+			settings.MaxWidth = 0
+		}
+	case 3: // Balanceado (padrão)
+		settings.CRF = 23
+		settings.Preset = "medium"
+		settings.TargetBitrate = 0 // Deixar o CRF controlar
+	case 4: // Alta qualidade
+		settings.CRF = 20
+		settings.Preset = "slow"
+		settings.TargetBitrate = 0
+	case 5: // Máxima qualidade
+		settings.CRF = 18
+		settings.Preset = "slow"
+		settings.TargetBitrate = 0
+	default: // Caso valor fora do intervalo
+		settings.CRF = 23
+		settings.Preset = "medium"
+		settings.TargetBitrate = 0
+	}
+	
+	// Adaptar preset conforme opção do usuário
+	switch ffmpeg.Options.Preset {
+	case "fast":
+		settings.Preset = "faster"
+	case "thorough":
+		settings.Preset = "slow"
+	}
+	
+	return settings
+}
+
+// Constrói o comando para o FFmpeg
+func (ffmpeg *FFmpeg) buildFFmpegCommand(settings *EncodingSettings) []string {
+	args := []string{
+		"-i", ffmpeg.InputFile,
+		"-c:v", settings.VideoCodec,
+		"-crf", fmt.Sprintf("%d", settings.CRF),
+		"-preset", settings.Preset,
+	}
+	
+	// Adicionar controle de bitrate se especificado
+	if settings.TargetBitrate > 0 {
+		args = append(args, "-maxrate", fmt.Sprintf("%d", settings.TargetBitrate))
+		args = append(args, "-bufsize", fmt.Sprintf("%d", settings.TargetBitrate*2))
+	}
+	
+	// Adicionar escala se especificada
+	if settings.MaxWidth > 0 || settings.MaxHeight > 0 {
+		scaleFilter := "-vf"
+		if settings.MaxWidth > 0 && settings.MaxHeight > 0 {
+			scaleFilter += fmt.Sprintf(" scale=%d:%d", settings.MaxWidth, settings.MaxHeight)
+		} else if settings.MaxWidth > 0 {
+			scaleFilter += fmt.Sprintf(" scale=%d:-2", settings.MaxWidth)
+		} else if settings.MaxHeight > 0 {
+			scaleFilter += fmt.Sprintf(" scale=-2:%d", settings.MaxHeight)
+		}
+		args = append(args, scaleFilter)
+	}
+	
+	// Copiar áudio
+	args = append(args, "-c:a", "aac", "-b:a", "128k")
+	
+	// Configurações de performance
+	args = append(args, "-movflags", "+faststart")
+	
+	// Forçar sobrescrever
+	args = append(args, "-y")
+	
+	// Arquivo de saída
+	args = append(args, ffmpeg.OutputFile)
+	
+	return args
 } 

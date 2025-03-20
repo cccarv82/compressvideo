@@ -11,7 +11,7 @@ type VideoFile struct {
 	Size      int64             // Size in bytes
 	Format    string            // Container format (mp4, mkv, etc.)
 	Duration  float64           // Duration in seconds
-	Bitrate   int64             // Overall bitrate in bits/s
+	BitRate   int64             // Overall bitrate in bits/s
 	VideoInfo VideoStreamInfo   // Information about the video stream
 	AudioInfo []AudioStreamInfo // Information about audio streams
 	Metadata  map[string]string // Additional metadata
@@ -23,7 +23,7 @@ type VideoStreamInfo struct {
 	Width         int     // Width in pixels
 	Height        int     // Height in pixels
 	FPS           float64 // Frames per second
-	Bitrate       int64   // Video bitrate in bits/s
+	BitRate       int64   // Video bitrate in bits/s
 	PixelFormat   string  // Pixel format (yuv420p, etc.)
 	ColorSpace    string  // Color space
 	IsHDR         bool    // Whether the video uses HDR
@@ -37,7 +37,7 @@ type AudioStreamInfo struct {
 	Codec         string // Audio codec (aac, opus, etc.)
 	Channels      int    // Number of channels
 	SampleRate    int    // Sample rate in Hz
-	Bitrate       int64  // Audio bitrate in bits/s
+	BitRate       int64  // Audio bitrate in bits/s
 	Language      string // Language code
 }
 

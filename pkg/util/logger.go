@@ -207,4 +207,9 @@ func (l *Logger) SetUseColors(useColors bool) {
 // SetLevel sets the log level
 func (l *Logger) SetLevel(level LogLevel) {
 	l.Level = level
+}
+
+// IsVerbose returns true if verbose mode is enabled
+func (l *Logger) IsVerbose() bool {
+	return l.Verbose
 } 
