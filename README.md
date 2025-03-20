@@ -16,6 +16,7 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - Support for H.264 and H.265 codecs
 - Cross-platform support (Linux, macOS, Windows)
 - Comprehensive testing and benchmarking
+- **Automatic FFmpeg download** if not installed on the system
 
 ## Implementation Status
 
@@ -24,6 +25,7 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - ✅ Sprint 3: Compression engine
 - ✅ Sprint 4: User interface improvements and bug fixes
 - ✅ Sprint 5: Testing and finalization
+- ✅ Extra: Automatic FFmpeg integration
 
 All planned sprints completed! CompressVideo v1.0.0 is now ready for production use.
 
@@ -56,6 +58,16 @@ make build
 # Or build for all supported platforms
 make cross-build
 ```
+
+### Dependencies
+
+CompressVideo requires FFmpeg to function. However, you don't need to install it manually:
+
+- If FFmpeg is already installed on your system, CompressVideo will detect and use it
+- If FFmpeg is not found, CompressVideo will automatically download and use a compatible version
+- The downloaded version will be stored in your user directory (~/.compressvideo) for future use
+
+This makes CompressVideo truly portable and easy to use on any system!
 
 ## Usage
 

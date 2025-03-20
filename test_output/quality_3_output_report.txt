@@ -17,7 +17,7 @@ COMPRESSION RESULTS:
   Compression Ratio: 5.76:1
 
 PERFORMANCE:
-  Processing Time:  38s
+  Processing Time:  47s
   Quality Estimate: Low - Significant quality loss (47.2/100)
   Overall Score:    97.2/100
 
@@ -34,4 +34,4 @@ ENCODING SETTINGS:
 OPTIMIZATION TIPS:
   • Screencasts often benefit from higher CRF values. Consider using CRF 28-32 if quality is acceptable.
 
-Report generated on 2025-03-20 16:13:04
+Report generated on 2025-03-20 16:36:54

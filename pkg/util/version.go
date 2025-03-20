@@ -5,7 +5,7 @@ const (
 	// AppName is the name of the application
 	AppName = "CompressVideo"
 	// Version is the current version of the application
-	Version = "1.0.0"
+	Version = "1.1.0"
 	// BuildDate is the date the application was built
 	BuildDate = "development"
 )

@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.0] - Aprimoramento de Usabilidade
+
+### Adicionado
+- Sistema de download automático do FFmpeg quando não está instalado
+- Verificação inteligente de disponibilidade do FFmpeg
+- Armazenamento da versão baixada do FFmpeg para uso futuro
+- Suporte à execução sem dependências externas
+- Mensagens amigáveis durante a detecção e download do FFmpeg
+
+### Melhorado
+- Documentação expandida para incluir informações sobre a instalação automática do FFmpeg
+- Interface de inicialização mais robusta
+- Melhor tratamento de ambientes sem FFmpeg instalado
+
 ## [1.0.0] - Sprint 5 - Testes e Finalização
 
 ### Adicionado

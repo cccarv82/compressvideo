@@ -17,11 +17,12 @@ COMPRESSION RESULTS:
   Compression Ratio: 5.76:1
 
 PERFORMANCE:
-  Processing Time:  36s
+  Processing Time:  56s
   Quality Estimate: Low - Significant quality loss (47.2/100)
   Overall Score:    97.2/100
 
 ENCODING SETTINGS:
+  bitrate: 2000k
   codec: libx265
   crf: 30
   preset: medium
@@ -29,9 +30,8 @@ ENCODING SETTINGS:
   tune: zerolatency
   x265-params: bframes=0
   pix_fmt: yuv420p
-  bitrate: 2000k
 
 OPTIMIZATION TIPS:
   • Screencasts often benefit from higher CRF values. Consider using CRF 28-32 if quality is acceptable.
 
-Report generated on 2025-03-20 16:12:18
+Report generated on 2025-03-20 16:36:01

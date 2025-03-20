@@ -20,20 +20,38 @@ type FFmpeg struct {
 
 // NewFFmpeg creates a new FFmpeg wrapper instance
 func NewFFmpeg(logger *util.Logger) (*FFmpeg, error) {
-	// Check if FFmpeg is installed
-	ffmpegPath, err := exec.LookPath("ffmpeg")
+	// Verificar se o FFmpeg está instalado ou pode ser baixado
+	ffmpegInfo, err := util.EnsureFFmpeg(logger)
 	if err != nil {
-		return nil, fmt.Errorf("ffmpeg not found: %w", err)
+		return nil, fmt.Errorf("falha ao garantir FFmpeg: %w", err)
 	}
-
-	// Check if FFprobe is installed
-	ffprobePath, err := exec.LookPath("ffprobe")
-	if err != nil {
-		return nil, fmt.Errorf("ffprobe not found: %w", err)
+	
+	if !ffmpegInfo.Available {
+		return nil, fmt.Errorf("FFmpeg não encontrado e não foi possível baixá-lo")
+	}
+	
+	// A versão baixada inclui apenas ffmpeg, não ffprobe
+	// Se é uma versão baixada, usamos ffmpeg para todas as operações 
+	ffprobePath := ffmpegInfo.Path
+	if !ffmpegInfo.IsDownloaded {
+		// Se é instalado pelo sistema, procurar o ffprobe também
+		path, err := exec.LookPath("ffprobe")
+		if err != nil {
+			logger.Warning("ffprobe não encontrado, algumas funcionalidades podem ficar limitadas")
+			// Usar ffmpeg no lugar, para operações básicas
+			ffprobePath = ffmpegInfo.Path
+		} else {
+			ffprobePath = path
+		}
+	}
+	
+	logger.Info("Usando FFmpeg: %s", ffmpegInfo.Path)
+	if ffprobePath != ffmpegInfo.Path {
+		logger.Info("Usando FFprobe: %s", ffprobePath)
 	}
 
 	return &FFmpeg{
-		FFmpegPath:  ffmpegPath,
+		FFmpegPath:  ffmpegInfo.Path,
 		FFprobePath: ffprobePath,
 		Logger:      logger,
 	}, nil
