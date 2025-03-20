@@ -123,7 +123,7 @@ func (vc *VideoCompressor) CompressVideo(inputFile, outputFile string, analysis 
 	
 	// Calculate average frame quality (can be done through VMAF or SSIM if needed)
 	// For now, we'll use a placeholder that estimates based on settings
-	result.AverageFrameQuality = vc.estimateFrameQuality(settings)
+	result.AverageFrameQuality = vc.EstimateFrameQuality(settings)
 	
 	return result, nil
 }
@@ -171,10 +171,12 @@ func (vc *VideoCompressor) adjustSettingsForPreset(settings map[string]string, p
 	// "balanced" preset uses the default settings from the analyzer
 }
 
-// compressVideoSingle compresses a video using a single FFmpeg process
+// compressVideoSingle compresses a video in a single process
 func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {
-	// Construct FFmpeg command
-	args := vc.buildFFmpegArgs(inputFile, outputFile, settings)
+	vc.Logger.Debug("Starting single-process compression")
+	
+	// Build FFmpeg command arguments
+	args := vc.BuildFFmpegArgs(inputFile, outputFile, settings)
 	
 	// Log the command
 	cmdStr := fmt.Sprintf("%s %s", vc.FFmpeg.FFmpegPath, strings.Join(args, " "))
@@ -406,8 +408,8 @@ func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDurat
 
 // compressSegment compresses a single video segment
 func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, settings map[string]string, progress progressReporter) error {
-	// Construct FFmpeg command
-	args := vc.buildFFmpegArgs(inputFile, outputFile, settings)
+	// Build FFmpeg command
+	args := vc.BuildFFmpegArgs(inputFile, outputFile, settings)
 	
 	// Run FFmpeg
 	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
@@ -495,8 +497,8 @@ func (vc *VideoCompressor) mergeSegments(listFile, outputFile, codec string) err
 	return nil
 }
 
-// buildFFmpegArgs builds FFmpeg command arguments from the settings
-func (vc *VideoCompressor) buildFFmpegArgs(inputFile, outputFile string, settings map[string]string) []string {
+// BuildFFmpegArgs constrói os argumentos para o comando FFmpeg
+func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, settings map[string]string) []string {
 	// Base arguments
 	args := []string{"-y", "-i", inputFile}
 	
@@ -587,8 +589,8 @@ func (vc *VideoCompressor) buildFFmpegArgs(inputFile, outputFile string, setting
 	return args
 }
 
-// estimateFrameQuality estimates video quality based on settings (0-100 scale)
-func (vc *VideoCompressor) estimateFrameQuality(settings map[string]string) float64 {
+// EstimateFrameQuality estima a qualidade do quadro com base nas configurações de compressão
+func (vc *VideoCompressor) EstimateFrameQuality(settings map[string]string) float64 {
 	codec := settings["codec"]
 	crf := 23.0 // Default CRF
 	

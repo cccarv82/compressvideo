@@ -17,15 +17,20 @@ sprint4: clean test build
 	@echo "Correções e melhorias aplicadas e testadas."
 
 # Sprint 5: Testes e Finalização
-sprint5: clean test
-	@echo "Preparando Sprint 5 (Testes e Finalização)..."
-	@echo "Tarefas pendentes:"
-	@echo " - Testes de integração"
-	@echo " - Testes de desempenho"
-	@echo " - Testes em diferentes sistemas operacionais"
-	@echo " - Empacotamento final para distribuição"
-	@echo " - Documentação completa"
-	@echo " - Atualização para versão 1.0.0"
+sprint5: clean test integration-test benchmark-test release
+	@echo "Sprint 5 (v1.0.0) concluído com sucesso!"
+	@echo "CompressVideo está pronto para produção!"
+	@echo "Arquivos de distribuição disponíveis em: $(DIST_DIR)"
+
+# Executar testes de integração
+integration-test:
+	@echo "Executando testes de integração..."
+	go test -v ./pkg/integration/...
+
+# Executar testes de benchmark
+benchmark-test:
+	@echo "Executando testes de benchmark..."
+	go test -bench=. ./pkg/benchmark/...
 
 # Regular build for current platform
 build:

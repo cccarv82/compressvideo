@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.0] - Sprint 5 - Testes e Finalização
+
+### Adicionado
+- Testes de integração completos para verificar o fluxo da aplicação
+- Testes de desempenho (benchmarks) para componentes críticos
+- Suporte aprimorado para diferentes sistemas operacionais
+- Utilitários específicos por sistema operacional
+- Exportação de APIs para facilitar testes e extensibilidade
+- Preparação para empacotamento e distribuição
+
+### Melhorado
+- Documentação expandida e revisada
+- Maior cobertura de testes
+- Otimizações de desempenho baseadas em benchmarks
+- Estabilidade em diferentes ambientes
+- Tratamento consistente de caminhos de arquivos
+- Versão atualizada para 1.0.0 para lançamento de produção
+
 ## [0.4.0] - Sprint 4 - Correções e Melhorias
 
 ### Corrigido

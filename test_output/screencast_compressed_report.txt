@@ -1,0 +1,37 @@
+COMPRESSION REPORT
+=======================================
+
+FILES:
+  Input:  ../../test_data/screencast_sample.mp4
+  Output: ../../test_output/screencast_compressed.mp4
+
+VIDEO DETAILS:
+  Resolution: 1920x1080
+  Duration:   32.80 seconds
+  Content:    Screencast, Low motion
+
+COMPRESSION RESULTS:
+  Original Size:    12.92 MB
+  Compressed Size:  2.24 MB
+  Space Saved:      10.68 MB (82.6%)
+  Compression Ratio: 5.76:1
+
+PERFORMANCE:
+  Processing Time:  36s
+  Quality Estimate: Low - Significant quality loss (47.2/100)
+  Overall Score:    97.2/100
+
+ENCODING SETTINGS:
+  codec: libx265
+  crf: 30
+  preset: medium
+  profile: main
+  tune: zerolatency
+  x265-params: bframes=0
+  pix_fmt: yuv420p
+  bitrate: 2000k
+
+OPTIMIZATION TIPS:
+  • Screencasts often benefit from higher CRF values. Consider using CRF 28-32 if quality is acceptable.
+
+Report generated on 2025-03-20 16:12:18
