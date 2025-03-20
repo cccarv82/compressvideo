@@ -8,15 +8,18 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - Automatic detection of video type (screencast, animation, gaming, etc.)
 - Motion complexity analysis for determining optimal encoding parameters
 - Intelligent codec selection based on content type
+- Parallel processing for faster compression
+- Advanced compression algorithms with quality-size balancing
+- Automatic segmentation for efficient multi-core processing
 - Real-time compression progress display
 - Detailed before/after compression reports
-- Parallel processing for faster compression
+- Support for H.264 and H.265 codecs
 
 ## Implementation Status
 
 - ✅ Sprint 1: CLI interface and project structure
 - ✅ Sprint 2: Video analysis and content detection
-- ⬜ Sprint 3: Compression engine
+- ✅ Sprint 3: Compression engine
 - ⬜ Sprint 4: User interface improvements
 - ⬜ Sprint 5: Testing and finalization
 
@@ -59,10 +62,34 @@ CompressVideo analyzes your video to determine:
 - Scene changes frequency
 - Frame complexity
 - Spatial detail level
-- Optimal codec selection (H.264, H.265, VP9)
+- Optimal codec selection (H.264, H.265)
 - Ideal bitrate for target quality
 
 Based on this analysis, it automatically selects the optimal compression settings to maintain visual quality while maximizing file size reduction.
+
+## Compression Engine
+
+The compression engine provides:
+
+- Parallel processing using goroutines for faster compression
+- Video segmentation for multi-core utilization
+- Adaptive quality settings based on content type
+- Dynamic bitrate adjustment based on complexity
+- Intelligent codec selection (H.264 for compatibility, H.265 for efficiency)
+- Quality-optimized audio compression
+- Real-time progress tracking
+
+The presets offer different tradeoffs:
+
+- **Quality levels (1-5)**:
+  - 1: Maximum compression, lower quality
+  - 3: Balanced compression and quality
+  - 5: Maximum quality, less compression
+
+- **Speed presets**:
+  - fast: Quicker compression, slightly larger file size
+  - balanced: Good balance between speed and compression
+  - thorough: Slower but more efficient compression
 
 ## Test Videos
 

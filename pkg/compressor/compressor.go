@@ -1,0 +1,643 @@
+package compressor
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/cccarv82/compressvideo/pkg/analyzer"
+	"github.com/cccarv82/compressvideo/pkg/ffmpeg"
+	"github.com/cccarv82/compressvideo/pkg/util"
+)
+
+// CompressionResult contains the results of a video compression
+type CompressionResult struct {
+	InputFile           string
+	OutputFile          string
+	OriginalSize        int64
+	CompressedSize      int64
+	CompressionRatio    float64
+	SavedSpaceBytes     int64
+	SavedSpacePercent   float64
+	ProcessingTime      time.Duration
+	AverageFrameQuality float64
+	FFmpegCommand       string
+	Settings            map[string]string
+	Error               error
+}
+
+// VideoCompressor handles video compression operations
+type VideoCompressor struct {
+	FFmpeg           *ffmpeg.FFmpeg
+	Logger           *util.Logger
+	Analyzer         *analyzer.ContentAnalyzer
+	ConcurrentWorkers int
+	TempDir          string
+}
+
+// NewVideoCompressor creates a new video compressor
+func NewVideoCompressor(ffmpeg *ffmpeg.FFmpeg, analyzer *analyzer.ContentAnalyzer, logger *util.Logger) *VideoCompressor {
+	// Set the number of concurrent workers to CPU cores
+	concurrentWorkers := runtime.NumCPU()
+	
+	// Create temp directory for processing
+	tempDir := filepath.Join(os.TempDir(), "compressvideo")
+	os.MkdirAll(tempDir, 0755)
+	
+	return &VideoCompressor{
+		FFmpeg:           ffmpeg,
+		Logger:           logger,
+		Analyzer:         analyzer,
+		ConcurrentWorkers: concurrentWorkers,
+		TempDir:          tempDir,
+	}
+}
+
+// CompressVideo compresses a video with the given settings
+func (vc *VideoCompressor) CompressVideo(inputFile, outputFile string, analysis *analyzer.VideoAnalysis, 
+	settings map[string]string, quality int, preset string, progress *util.ProgressTracker) (*CompressionResult, error) {
+	
+	startTime := time.Now()
+	
+	// Get original file size
+	inputInfo, err := os.Stat(inputFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get input file info: %w", err)
+	}
+	originalSize := inputInfo.Size()
+	
+	// Calculate optimal compression settings if not provided
+	if settings == nil {
+		settings, err = vc.Analyzer.GetCompressionSettings(analysis, quality)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get compression settings: %w", err)
+		}
+	}
+	
+	// Adjust settings based on preset
+	vc.adjustSettingsForPreset(settings, preset)
+	
+	// Prepare result
+	result := &CompressionResult{
+		InputFile:    inputFile,
+		OutputFile:   outputFile,
+		OriginalSize: originalSize,
+		Settings:     settings,
+	}
+	
+	// Determine compression approach based on content type and video length
+	useParallelCompression := analysis.VideoFile.Duration > 60 && 
+		analysis.ContentType != analyzer.ContentTypeScreencast
+	
+	// Execute compression
+	if useParallelCompression {
+		err = vc.compressVideoParallel(inputFile, outputFile, settings, progress)
+	} else {
+		err = vc.compressVideoSingle(inputFile, outputFile, settings, progress)
+	}
+	
+	if err != nil {
+		result.Error = err
+		return result, err
+	}
+	
+	// Get compressed file size
+	outputInfo, err := os.Stat(outputFile)
+	if err != nil {
+		result.Error = fmt.Errorf("failed to get output file info: %w", err)
+		return result, result.Error
+	}
+	result.CompressedSize = outputInfo.Size()
+	
+	// Calculate compression metrics
+	result.ProcessingTime = time.Since(startTime)
+	result.SavedSpaceBytes = originalSize - result.CompressedSize
+	result.CompressionRatio = float64(originalSize) / float64(result.CompressedSize)
+	result.SavedSpacePercent = float64(result.SavedSpaceBytes) / float64(originalSize) * 100
+	
+	// Calculate average frame quality (can be done through VMAF or SSIM if needed)
+	// For now, we'll use a placeholder that estimates based on settings
+	result.AverageFrameQuality = vc.estimateFrameQuality(settings)
+	
+	return result, nil
+}
+
+// adjustSettingsForPreset adjusts the compression settings based on the chosen preset
+func (vc *VideoCompressor) adjustSettingsForPreset(settings map[string]string, preset string) {
+	// Get current preset speed from settings
+	currentPreset := settings["preset"]
+	
+	switch preset {
+	case "fast":
+		// For fast preset, use a faster encoding setting
+		if currentPreset == "veryslow" {
+			settings["preset"] = "medium"
+		} else if currentPreset == "slower" || currentPreset == "slow" {
+			settings["preset"] = "fast"
+		} else if currentPreset == "medium" {
+			settings["preset"] = "veryfast"
+		} else {
+			settings["preset"] = "ultrafast"
+		}
+		
+		// Decrease thread count for speed
+		settings["threads"] = strconv.Itoa(vc.ConcurrentWorkers)
+		
+	case "thorough":
+		// For thorough preset, use slower, more efficient encoding
+		if currentPreset == "ultrafast" || currentPreset == "veryfast" {
+			settings["preset"] = "medium"
+		} else if currentPreset == "fast" || currentPreset == "medium" {
+			settings["preset"] = "slow"
+		} else {
+			settings["preset"] = "veryslow"
+		}
+		
+		// Improve quality slightly
+		if crf, ok := settings["crf"]; ok {
+			crfValue, _ := strconv.Atoi(crf)
+			if crfValue > 20 { // Lower CRF means higher quality
+				settings["crf"] = strconv.Itoa(crfValue - 2)
+			}
+		}
+	}
+	
+	// "balanced" preset uses the default settings from the analyzer
+}
+
+// compressVideoSingle compresses a video using a single FFmpeg process
+func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {
+	// Construct FFmpeg command
+	args := vc.buildFFmpegArgs(inputFile, outputFile, settings)
+	
+	// Log the command
+	cmdStr := fmt.Sprintf("%s %s", vc.FFmpeg.FFmpegPath, strings.Join(args, " "))
+	vc.Logger.Debug("Running FFmpeg command: %s", cmdStr)
+	
+	// Create command
+	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	
+	// Get video duration for progress calculation
+	videoFile, err := vc.FFmpeg.GetVideoInfo(inputFile)
+	if err != nil {
+		return fmt.Errorf("error getting video duration: %w", err)
+	}
+	totalDuration := videoFile.Duration
+	
+	// Pipe stderr to capture progress info
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+	
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start FFmpeg: %w", err)
+	}
+	
+	// Monitor progress
+	go func() {
+		// Read FFmpeg output and update progress
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderr.Read(buf)
+			if n == 0 || err != nil {
+				break
+			}
+			
+			output := string(buf[:n])
+			// Parse time information from FFmpeg output
+			timeMatch := strings.Index(output, "time=")
+			if timeMatch != -1 {
+				timeStr := output[timeMatch+5 : timeMatch+16]
+				timeStr = strings.TrimSpace(timeStr)
+				// Parse time in HH:MM:SS format
+				parts := strings.Split(timeStr, ":")
+				if len(parts) == 3 {
+					hours, _ := strconv.Atoi(parts[0])
+					minutes, _ := strconv.Atoi(parts[1])
+					seconds, _ := strconv.ParseFloat(parts[2], 64)
+					currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+					
+					// Update progress
+					percentComplete := int64((currentTime / totalDuration) * 100)
+					if percentComplete <= 100 {
+						progress.Update(percentComplete)
+					}
+				}
+			}
+		}
+	}()
+	
+	// Wait for the command to finish
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("FFmpeg error: %w", err)
+	}
+	
+	// Set progress to 100%
+	progress.Update(100)
+	
+	return nil
+}
+
+// compressVideoParallel compresses a video by splitting it into segments and processing in parallel
+func (vc *VideoCompressor) compressVideoParallel(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {
+	vc.Logger.Info("Using parallel compression for faster processing")
+	
+	// Get video duration to split into segments
+	videoFile, err := vc.FFmpeg.GetVideoInfo(inputFile)
+	if err != nil {
+		return fmt.Errorf("error getting video info: %w", err)
+	}
+	
+	// Create temporary directory for segments
+	segmentDir := filepath.Join(vc.TempDir, fmt.Sprintf("segments_%d", time.Now().UnixNano()))
+	if err := os.MkdirAll(segmentDir, 0755); err != nil {
+		return fmt.Errorf("failed to create segment directory: %w", err)
+	}
+	defer os.RemoveAll(segmentDir) // Clean up when done
+	
+	// Calculate how many segments to create (1 per CPU core)
+	numSegments := vc.ConcurrentWorkers
+	if numSegments > 8 {
+		numSegments = 8 // Cap at 8 segments to avoid overhead
+	}
+	
+	// Split the video into segments
+	segmentDuration := videoFile.Duration / float64(numSegments)
+	segments, err := vc.splitVideo(inputFile, segmentDir, segmentDuration, numSegments)
+	if err != nil {
+		return fmt.Errorf("failed to split video: %w", err)
+	}
+	
+	// Create list file for concat
+	listPath := filepath.Join(segmentDir, "segments.txt")
+	listFile, err := os.Create(listPath)
+	if err != nil {
+		return fmt.Errorf("failed to create segment list: %w", err)
+	}
+	
+	// Compress segments in parallel
+	var wg sync.WaitGroup
+	compressedSegments := make([]string, len(segments))
+	errorChan := make(chan error, len(segments))
+	progressChan := make(chan int, 100) // For progress updates
+	
+	// Start a goroutine to aggregate progress updates
+	go func() {
+		total := 0
+		count := 0
+		for p := range progressChan {
+			total += p
+			count++
+			// Each segment contributes 1/numSegments of the total progress
+			// 90% for compression, 10% reserved for the final merge
+			avgProgress := int64(float64(total) / float64(count*100) * 90)
+			if avgProgress < 90 {
+				progress.Update(avgProgress)
+			}
+		}
+	}()
+	
+	// Start workers for each segment
+	for i, segment := range segments {
+		wg.Add(1)
+		go func(i int, segment string) {
+			defer wg.Done()
+			
+			// Create output path for compressed segment
+			outSegment := filepath.Join(segmentDir, fmt.Sprintf("out_%04d.mp4", i))
+			compressedSegments[i] = outSegment
+			
+			// Clone settings map to avoid race conditions
+			segmentSettings := make(map[string]string)
+			for k, v := range settings {
+				segmentSettings[k] = v
+			}
+			
+			// Force key frames at segment boundaries
+			segmentSettings["force_key_frames"] = "expr:eq(n,0)"
+			
+			// Create segment progress tracker that reports to the channel
+			segmentProgress := &segmentProgressTracker{
+				segmentID: i,
+				progressChan: progressChan,
+			}
+			
+			// Compress this segment
+			err := vc.compressSegment(segment, outSegment, segmentSettings, segmentProgress)
+			if err != nil {
+				errorChan <- fmt.Errorf("segment %d error: %w", i, err)
+				return
+			}
+			
+			// Write entry to list file (thread-safe by using a synchronized file)
+			path, _ := filepath.Rel(segmentDir, outSegment)
+			line := fmt.Sprintf("file '%s'\n", path)
+			if _, err := listFile.WriteString(line); err != nil {
+				errorChan <- fmt.Errorf("failed to write to list file: %w", err)
+			}
+		}(i, segment)
+	}
+	
+	// Wait for all segments to be compressed
+	wg.Wait()
+	close(progressChan)
+	listFile.Close()
+	
+	// Check for errors
+	select {
+	case err := <-errorChan:
+		return err
+	default:
+		// No errors
+	}
+	
+	// Update progress
+	progress.Update(90)
+	
+	// Merge the segments
+	vc.Logger.Info("Merging compressed segments...")
+	err = vc.mergeSegments(listPath, outputFile, settings["codec"])
+	if err != nil {
+		return fmt.Errorf("failed to merge segments: %w", err)
+	}
+	
+	// Set progress to 100%
+	progress.Update(100)
+	
+	return nil
+}
+
+// splitVideo splits a video into multiple segments of equal duration
+func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDuration float64, numSegments int) ([]string, error) {
+	segments := make([]string, numSegments)
+	
+	for i := 0; i < numSegments; i++ {
+		startTime := float64(i) * segmentDuration
+		outPath := filepath.Join(segmentDir, fmt.Sprintf("segment_%04d.mp4", i))
+		segments[i] = outPath
+		
+		args := []string{
+			"-ss", fmt.Sprintf("%.3f", startTime),
+			"-i", inputFile,
+			"-t", fmt.Sprintf("%.3f", segmentDuration),
+			"-c", "copy", // Use copy to make splitting fast
+			"-avoid_negative_ts", "1",
+			"-y", outPath,
+		}
+		
+		cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+		vc.Logger.Debug("Splitting segment %d: %s", i, strings.Join(cmd.Args, " "))
+		
+		if output, err := cmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("failed to split segment %d: %w\nOutput: %s", i, err, string(output))
+		}
+	}
+	
+	return segments, nil
+}
+
+// compressSegment compresses a single video segment
+func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, settings map[string]string, progress progressReporter) error {
+	// Construct FFmpeg command
+	args := vc.buildFFmpegArgs(inputFile, outputFile, settings)
+	
+	// Run FFmpeg
+	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	
+	// Get video duration for progress calculation
+	videoFile, err := vc.FFmpeg.GetVideoInfo(inputFile)
+	if err != nil {
+		return fmt.Errorf("error getting video duration: %w", err)
+	}
+	totalDuration := videoFile.Duration
+	
+	// Pipe stderr to capture progress info
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("failed to get stderr pipe: %w", err)
+	}
+	
+	// Start the command
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start FFmpeg: %w", err)
+	}
+	
+	// Monitor progress
+	go func() {
+		// Read FFmpeg output and update progress
+		buf := make([]byte, 1024)
+		for {
+			n, err := stderr.Read(buf)
+			if n == 0 || err != nil {
+				break
+			}
+			
+			output := string(buf[:n])
+			// Parse time information from FFmpeg output
+			timeMatch := strings.Index(output, "time=")
+			if timeMatch != -1 {
+				timeStr := output[timeMatch+5 : timeMatch+16]
+				timeStr = strings.TrimSpace(timeStr)
+				// Parse time in HH:MM:SS format
+				parts := strings.Split(timeStr, ":")
+				if len(parts) == 3 {
+					hours, _ := strconv.Atoi(parts[0])
+					minutes, _ := strconv.Atoi(parts[1])
+					seconds, _ := strconv.ParseFloat(parts[2], 64)
+					currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+					
+					// Update progress for this segment
+					percentComplete := int((currentTime / totalDuration) * 100)
+					if percentComplete <= 100 {
+						progress.reportProgress(percentComplete)
+					}
+				}
+			}
+		}
+	}()
+	
+	// Wait for the command to finish
+	if err := cmd.Wait(); err != nil {
+		return fmt.Errorf("FFmpeg error: %w", err)
+	}
+	
+	// Set progress to 100%
+	progress.reportProgress(100)
+	
+	return nil
+}
+
+// mergeSegments merges multiple video segments into one output file
+func (vc *VideoCompressor) mergeSegments(listFile, outputFile, codec string) error {
+	// Use FFmpeg's concat demuxer to merge segments
+	args := []string{
+		"-f", "concat",
+		"-safe", "0",
+		"-i", listFile,
+		"-c", "copy", // Just copy the streams without re-encoding
+		"-y", outputFile,
+	}
+	
+	cmd := exec.Command(vc.FFmpeg.FFmpegPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to merge segments: %w\nOutput: %s", err, string(output))
+	}
+	
+	return nil
+}
+
+// buildFFmpegArgs builds FFmpeg command arguments from the settings
+func (vc *VideoCompressor) buildFFmpegArgs(inputFile, outputFile string, settings map[string]string) []string {
+	// Base arguments
+	args := []string{"-y", "-i", inputFile}
+	
+	// Add codec settings
+	codec := settings["codec"]
+	if codec != "" {
+		args = append(args, "-c:v", codec)
+	}
+	
+	// Add preset
+	preset := settings["preset"]
+	if preset != "" {
+		args = append(args, "-preset", preset)
+	}
+	
+	// Add CRF value for quality
+	crf := settings["crf"]
+	if crf != "" {
+		args = append(args, "-crf", crf)
+	}
+	
+	// Add profile
+	profile := settings["profile"]
+	if profile != "" {
+		args = append(args, "-profile:v", profile)
+	}
+	
+	// Add level
+	level := settings["level"]
+	if level != "" {
+		args = append(args, "-level", level)
+	}
+	
+	// Add tuning parameter
+	tune := settings["tune"]
+	if tune != "" {
+		args = append(args, "-tune", tune)
+	}
+	
+	// Add codec-specific parameters
+	if codec == "libx265" && settings["x265-params"] != "" {
+		args = append(args, "-x265-params", settings["x265-params"])
+	}
+	
+	// Add pixel format if specified
+	pixFmt := settings["pix_fmt"]
+	if pixFmt != "" {
+		args = append(args, "-pix_fmt", pixFmt)
+	}
+	
+	// Add force key frames if specified
+	forceKeyFrames := settings["force_key_frames"]
+	if forceKeyFrames != "" {
+		args = append(args, "-force_key_frames", forceKeyFrames)
+	}
+	
+	// Add audio codec settings
+	audioCodec := settings["audio_codec"]
+	if audioCodec != "" {
+		if audioCodec == "copy" {
+			args = append(args, "-c:a", "copy")
+		} else {
+			args = append(args, "-c:a", audioCodec)
+			
+			// Add audio bitrate if specified
+			audioBitrate := settings["audio_bitrate"]
+			if audioBitrate != "" {
+				args = append(args, "-b:a", audioBitrate)
+			}
+		}
+	}
+	
+	// Add thread count
+	threads := settings["threads"]
+	if threads != "" {
+		args = append(args, "-threads", threads)
+	}
+	
+	// Add target bitrate if specified
+	bitrate := settings["bitrate"]
+	if bitrate != "" {
+		args = append(args, "-b:v", bitrate)
+	}
+	
+	// Add output file
+	args = append(args, outputFile)
+	
+	return args
+}
+
+// estimateFrameQuality estimates video quality based on settings (0-100 scale)
+func (vc *VideoCompressor) estimateFrameQuality(settings map[string]string) float64 {
+	codec := settings["codec"]
+	crf := 23.0 // Default CRF
+	
+	// Parse CRF if available
+	if crfStr, ok := settings["crf"]; ok {
+		parsedCRF, err := strconv.ParseFloat(crfStr, 64)
+		if err == nil {
+			crf = parsedCRF
+		}
+	}
+	
+	// Estimate quality based on codec and CRF
+	quality := 0.0
+	
+	if codec == "libx264" {
+		// For H.264, CRF 0-51 (0=lossless, 23=default, 51=worst)
+		// Convert to 0-100 scale
+		quality = 100 - (crf * 1.96) // 100-(23*1.96) ≈ 55 (default quality)
+	} else if codec == "libx265" {
+		// For H.265, CRF 0-51 (0=lossless, 28=default, 51=worst)
+		// HEVC generally has better quality at the same CRF compared to H.264
+		quality = 100 - (crf * 1.76) // 100-(28*1.76) ≈ 51 (default quality)
+	} else if codec == "libvpx-vp9" {
+		// For VP9, CRF 0-63 (0=lossless, 31=default, 63=worst)
+		// Convert to 0-100 scale
+		quality = 100 - (crf * 1.58) // 100-(31*1.58) ≈ 51 (default quality)
+	}
+	
+	// Ensure quality is in 0-100 range
+	if quality < 0 {
+		quality = 0
+	} else if quality > 100 {
+		quality = 100
+	}
+	
+	return quality
+}
+
+// Simple progress reporter interface for segment compression
+type progressReporter interface {
+	reportProgress(progress int)
+}
+
+// Implementation of progress reporter for segments
+type segmentProgressTracker struct {
+	segmentID    int
+	progressChan chan<- int
+}
+
+func (spt *segmentProgressTracker) reportProgress(progress int) {
+	spt.progressChan <- progress
+} 

@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] - Sprint 3 - Motor de Compressão Inteligente
+
+### Adicionado
+- Motor de compressão efetiva para vídeos
+- Implementação do processamento paralelo usando goroutines
+- Segmentação de vídeos para compressão paralela
+- Suporte aos codecs H.264 e H.265
+- Seleção automática de codec baseada no tipo de conteúdo
+- Ajuste dinâmico de parâmetros de compressão
+- Presets de qualidade (1-5) que balanceiam qualidade e tamanho
+- Presets de velocidade (fast, balanced, thorough)
+- Medição de progresso em tempo real
+- Relatório de resultados da compressão
+
 ## [0.1.1] - Melhorias nos Testes e Documentação
 
 ### Adicionado

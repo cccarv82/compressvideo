@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/cccarv82/compressvideo/pkg/ffmpeg"
@@ -423,183 +424,238 @@ func containsAny(s string, substrings []string) bool {
 	return false
 }
 
-// GetCompressionSettings returns FFmpeg settings based on analysis
-func (ca *ContentAnalyzer) GetCompressionSettings(analysis *VideoAnalysis, quality int) (map[string]string, error) {
+// GetCompressionSettings calculates the optimal compression settings based on video analysis
+func (ca *ContentAnalyzer) GetCompressionSettings(analysis *VideoAnalysis, qualityLevel int) (map[string]string, error) {
+	if analysis == nil {
+		return nil, fmt.Errorf("video analysis is required")
+	}
+	
+	// Initialize settings map
 	settings := make(map[string]string)
 	
-	// Base FFmpeg command (common for all)
-	settings["input"] = analysis.VideoFile.Path
+	// Select codec based on content type
+	settings["codec"] = ca.selectCodec(analysis.ContentType)
 	
-	// Determine codec-specific parameters
-	switch analysis.RecommendedCodec {
-	case "h264":
-		settings["codec"] = "libx264"
-		
-		// Quality presets (1=max compression, 5=max quality)
-		presets := []string{"veryslow", "slower", "medium", "fast", "ultrafast"}
-		settings["preset"] = presets[quality-1]
-		
-		// CRF (Constant Rate Factor) settings adjusted by content type
-		// Lower CRF = Higher quality
-		baseCRF := 23 // Default for balanced quality
-		
-		// Adjust CRF based on quality level (higher quality = lower CRF)
-		qualityAdjustment := (3 - quality) * 3
-		
-		// Adjust CRF based on content type
-		contentAdjustment := 0
-		switch analysis.ContentType {
-		case ContentTypeScreencast:
-			contentAdjustment = 3 // Screencasts can use higher CRF (lower quality)
-		case ContentTypeAnimation:
-			contentAdjustment = 1 // Animation needs slightly higher quality
-		case ContentTypeGaming:
-			contentAdjustment = -1 // Gaming needs higher quality
-		case ContentTypeSportsAction:
-			contentAdjustment = -2 // Sports needs even higher quality
-		}
-		
-		// Final CRF calculation
-		crf := baseCRF + qualityAdjustment + contentAdjustment
-		
-		// Ensure CRF stays within reasonable bounds
-		if crf < 18 {
-			crf = 18
-		} else if crf > 28 {
-			crf = 28
-		}
-		
-		settings["crf"] = fmt.Sprintf("%d", crf)
-		
-		// Additional settings
-		settings["profile"] = "high"
-		settings["level"] = "4.1"
-		settings["tune"] = getTuneParameter(analysis.ContentType)
-		
-	case "hevc":
-		settings["codec"] = "libx265"
-		
-		// Quality presets
-		presets := []string{"veryslow", "slow", "medium", "fast", "ultrafast"}
-		settings["preset"] = presets[quality-1]
-		
-		// x265 uses a different CRF scale
-		baseCRF := 28 // Default for balanced quality
-		
-		// Adjust CRF based on quality level
-		qualityAdjustment := (3 - quality) * 3
-		
-		// Adjust CRF based on content type
-		contentAdjustment := 0
-		switch analysis.ContentType {
-		case ContentTypeScreencast:
-			contentAdjustment = 3
-		case ContentTypeAnimation:
-			contentAdjustment = 1
-		case ContentTypeGaming:
-			contentAdjustment = -1
-		case ContentTypeSportsAction:
-			contentAdjustment = -2
-		}
-		
-		// Final CRF calculation
-		crf := baseCRF + qualityAdjustment + contentAdjustment
-		
-		// Ensure CRF stays within reasonable bounds
-		if crf < 20 {
-			crf = 20
-		} else if crf > 32 {
-			crf = 32
-		}
-		
-		settings["crf"] = fmt.Sprintf("%d", crf)
-		
-		// Additional settings
-		settings["x265-params"] = "profile=main"
-		if analysis.VideoFile.VideoInfo.IsHDR {
-			settings["pix_fmt"] = "yuv420p10le" // 10-bit color for HDR
-		}
-		
-	case "vp9":
-		settings["codec"] = "libvpx-vp9"
-		
-		// For VP9, we use a different approach with target bitrate and CRF
-		targetBitrate := analysis.OptimalBitrate / 1000 // Convert to kbps
-		
-		// Adjust based on quality setting
-		if quality == 1 {
-			targetBitrate = int64(float64(targetBitrate) * 0.7)
-		} else if quality == 5 {
-			targetBitrate = int64(float64(targetBitrate) * 1.3)
-		}
-		
-		settings["bitrate"] = fmt.Sprintf("%d", targetBitrate)
-		
-		// Quality settings for VP9
-		baseCRF := 31 // Default for balanced quality
-		
-		// Adjust CRF based on quality level
-		qualityAdjustment := (3 - quality) * 3
-		
-		// Final CRF calculation
-		crf := baseCRF + qualityAdjustment
-		
-		// Ensure CRF stays within reasonable bounds
-		if crf < 15 {
-			crf = 15
-		} else if crf > 35 {
-			crf = 35
-		}
-		
-		settings["crf"] = fmt.Sprintf("%d", crf)
-		settings["quality"] = "good"
-		settings["speed"] = fmt.Sprintf("%d", 6-quality) // Speed 2-5 is good range
-		
-		// Set CPU usage based on preset
-		cpuUsed := 6 - quality // 1 = best quality, 5 = fastest
-		settings["cpu-used"] = fmt.Sprintf("%d", cpuUsed)
-		
-		if analysis.VideoFile.VideoInfo.IsHDR {
-			settings["pix_fmt"] = "yuv420p10le" // 10-bit color for HDR
-		}
+	// Calculate optimal quality (CRF) value based on quality level and content type
+	settings["crf"] = ca.calculateCRF(analysis.ContentType, analysis.MotionComplexity, qualityLevel)
+	
+	// Set preset based on quality level and motion complexity
+	settings["preset"] = ca.selectPreset(qualityLevel, analysis.MotionComplexity)
+	
+	// Add codec-specific settings
+	ca.addCodecSpecificSettings(settings, analysis)
+	
+	// Calculate optimal bitrate if needed
+	optimalBitrateStr := ca.calculateOptimalBitrateString(analysis, qualityLevel)
+	if optimalBitrateStr != "" {
+		settings["bitrate"] = optimalBitrateStr
 	}
 	
-	// Set thread count for parallel processing
-	settings["threads"] = "0" // Let FFmpeg decide based on system capabilities
-	
-	// Audio settings (generally keep the same quality)
-	// Determine if we should transcode the audio
-	if len(analysis.VideoFile.AudioInfo) > 0 {
-		audioCodec := analysis.VideoFile.AudioInfo[0].Codec
-		
-		// Keep audio codec if it's already efficient
-		if audioCodec == "aac" || audioCodec == "opus" {
-			settings["audio_codec"] = "copy"
-		} else {
-			// Convert to AAC with reasonable quality
-			settings["audio_codec"] = "aac"
-			settings["audio_bitrate"] = "128k" // Good quality for most content
-		}
-	} else {
-		// No audio detected
-		settings["audio_codec"] = "copy"
-	}
+	// Audio settings
+	ca.setAudioSettings(settings, analysis)
 	
 	return settings, nil
 }
 
-// getTuneParameter returns the appropriate tune parameter for x264/x265
-func getTuneParameter(contentType ContentType) string {
+// selectCodec chooses the most appropriate codec for the content type
+func (ca *ContentAnalyzer) selectCodec(contentType ContentType) string {
 	switch contentType {
-	case ContentTypeAnimation:
-		return "animation"
-	case ContentTypeScreencast:
-		return "stillimage"
+	case ContentTypeScreencast, ContentTypeAnimation:
+		// Screencasts and animations tend to have large flat areas and sharp edges
+		// HEVC/H.265 is more efficient for this type of content
+		return "libx265"
 	case ContentTypeGaming:
-		return "grain" // Preserve the texture in games
-	case ContentTypeSportsAction:
-		return "zerolatency" // Better for high motion
+		// Gaming has a mix of complex motion and UI elements
+		// H.264 offers a good balance of compatibility and efficiency
+		return "libx264"
 	default:
-		return "film" // Good default for general content
+		// For most other content types, H.264 provides good compatibility
+		return "libx264"
+	}
+}
+
+// calculateCRF determines the Constant Rate Factor for quality control
+func (ca *ContentAnalyzer) calculateCRF(contentType ContentType, motionComplexity MotionComplexity, qualityLevel int) string {
+	// Base CRF values per codec and content type
+	// Lower CRF = Higher quality
+	baseCRF := 23 // Default for H.264
+	
+	// Adjust for content type
+	switch contentType {
+	case ContentTypeScreencast:
+		baseCRF = 28 // Screencasts can use higher CRF (lower quality) as they're simpler
+	case ContentTypeAnimation:
+		baseCRF = 26 // Animations can use higher CRF while maintaining quality
+	case ContentTypeGaming:
+		baseCRF = 23 // Gaming needs more quality to preserve details
+	case ContentTypeLiveAction, ContentTypeDocumentary:
+		baseCRF = 20 // Natural content needs lower CRF (higher quality)
+	}
+	
+	// Adjust for motion complexity
+	if motionComplexity == MotionComplexityHigh {
+		baseCRF -= 2 // Higher motion needs better quality
+	} else if motionComplexity == MotionComplexityLow {
+		baseCRF += 2 // Lower motion can use higher CRF
+	}
+	
+	// Adjust for quality level (1-5)
+	// Quality 1 = max compression (higher CRF)
+	// Quality 5 = max quality (lower CRF)
+	qualityAdjustment := (3 - qualityLevel) * 2
+	
+	finalCRF := baseCRF + qualityAdjustment
+	
+	// Ensure CRF is within valid range
+	if finalCRF < 18 {
+		finalCRF = 18
+	} else if finalCRF > 32 {
+		finalCRF = 32
+	}
+	
+	return strconv.Itoa(finalCRF)
+}
+
+// selectPreset chooses the FFmpeg preset based on quality level and motion complexity
+func (ca *ContentAnalyzer) selectPreset(qualityLevel int, motionComplexity MotionComplexity) string {
+	// Presets from fastest to slowest: ultrafast, superfast, veryfast, faster, fast, medium, slow, slower, veryslow
+	
+	// Base preset based on quality level
+	// Higher quality levels use slower presets for better compression
+	switch qualityLevel {
+	case 1: // Maximum compression
+		if motionComplexity == MotionComplexityHigh {
+			return "veryslow"
+		}
+		return "slower"
+	case 2:
+		return "slow"
+	case 3: // Balanced
+		return "medium"
+	case 4:
+		return "fast"
+	case 5: // Maximum quality
+		return "ultrafast"
+	default:
+		return "medium"
+	}
+}
+
+// addCodecSpecificSettings adds settings specific to the selected codec
+func (ca *ContentAnalyzer) addCodecSpecificSettings(settings map[string]string, analysis *VideoAnalysis) {
+	codec := settings["codec"]
+	
+	// Add x265 specific settings
+	if codec == "libx265" {
+		// Add appropriate profile
+		// For 8-bit content, main profile is sufficient
+		// For 10-bit content, main10 profile is needed
+		settings["profile"] = "main"
+		
+		// For screencasts, tune for zero-latency can help
+		if analysis.ContentType == ContentTypeScreencast {
+			settings["tune"] = "zerolatency"
+			// x265 specific parameters
+			settings["x265-params"] = "bframes=0"
+		}
+	}
+	
+	// Add x264 specific settings
+	if codec == "libx264" {
+		// Set appropriate profile
+		if analysis.ContentType == ContentTypeGaming || analysis.ContentType == ContentTypeLiveAction {
+			settings["profile"] = "high"
+			settings["level"] = "4.1"
+		} else {
+			settings["profile"] = "main"
+			settings["level"] = "3.1"
+		}
+		
+		// For film content, use film tuning
+		if analysis.ContentType == ContentTypeLiveAction || analysis.ContentType == ContentTypeDocumentary {
+			settings["tune"] = "film"
+		}
+	}
+	
+	// Set appropriate pixel format
+	settings["pix_fmt"] = "yuv420p" // Most compatible format
+}
+
+// calculateOptimalBitrateString calculates the optimal bitrate for the video and returns as string
+func (ca *ContentAnalyzer) calculateOptimalBitrateString(analysis *VideoAnalysis, qualityLevel int) string {
+	// Get video dimensions
+	width := analysis.VideoFile.VideoInfo.Width
+	height := analysis.VideoFile.VideoInfo.Height
+	
+	// Calculate pixels per frame (in millions)
+	pixelsPerFrame := float64(width * height) / 1000000.0
+	
+	// Base bitrate factors by content type (in Kbps per million pixels)
+	var baseBitrateFactor float64
+	
+	switch analysis.ContentType {
+	case ContentTypeScreencast:
+		baseBitrateFactor = 1000 // Lower for screencasts
+	case ContentTypeAnimation:
+		baseBitrateFactor = 1200
+	case ContentTypeGaming:
+		baseBitrateFactor = 1800
+	case ContentTypeLiveAction, ContentTypeDocumentary:
+		baseBitrateFactor = 2000 // Higher for natural content
+	default:
+		baseBitrateFactor = 1500
+	}
+	
+	// Adjust for motion complexity
+	if analysis.MotionComplexity == MotionComplexityHigh {
+		baseBitrateFactor *= 1.5 // Higher motion needs more bitrate
+	} else if analysis.MotionComplexity == MotionComplexityLow {
+		baseBitrateFactor *= 0.7 // Lower motion needs less bitrate
+	}
+	
+	// Adjust for quality level (1-5)
+	qualityMultiplier := 0.6 + float64(qualityLevel)*0.2 // Ranges from 0.8 to 1.6
+	
+	// Calculate final bitrate in Kbps
+	bitrate := int(pixelsPerFrame * baseBitrateFactor * qualityMultiplier)
+	
+	// Set minimum bitrate based on resolution
+	minBitrate := 500 // 500 Kbps
+	if width >= 1920 || height >= 1080 {
+		minBitrate = 2000 // 2 Mbps for 1080p
+	} else if width >= 1280 || height >= 720 {
+		minBitrate = 1000 // 1 Mbps for 720p
+	}
+	
+	// Ensure bitrate is not below minimum
+	if bitrate < minBitrate {
+		bitrate = minBitrate
+	}
+	
+	// Return bitrate in Kbps
+	return fmt.Sprintf("%dk", bitrate)
+}
+
+// setAudioSettings adds audio encoding settings
+func (ca *ContentAnalyzer) setAudioSettings(settings map[string]string, analysis *VideoAnalysis) {
+	// Check if input has audio
+	if len(analysis.VideoFile.AudioInfo) == 0 {
+		return // No audio stream
+	}
+	
+	// For most cases, copying the audio is fine
+	settings["audio_codec"] = "copy"
+	
+	// If the audio bitrate is very high, we might want to re-encode
+	if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].Bitrate > 128000 && 
+	   (analysis.ContentType == ContentTypeScreencast || analysis.ContentType == ContentTypeAnimation) {
+		// Use AAC with a reasonable bitrate for screencast/animation
+		settings["audio_codec"] = "aac"
+		settings["audio_bitrate"] = "128k"
+	} else if len(analysis.VideoFile.AudioInfo) > 0 && analysis.VideoFile.AudioInfo[0].Bitrate > 192000 && 
+			  (analysis.ContentType == ContentTypeLiveAction || analysis.ContentType == ContentTypeDocumentary) {
+		// Use a higher bitrate for content where audio quality is more important
+		settings["audio_codec"] = "aac"
+		settings["audio_bitrate"] = "192k"
 	}
 } 

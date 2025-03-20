@@ -6,6 +6,7 @@ import (
 
 	"github.com/cccarv82/compressvideo/pkg/ffmpeg"
 	"github.com/cccarv82/compressvideo/pkg/util"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestContentTypeString(t *testing.T) {
@@ -180,25 +181,255 @@ func TestDetermineOptimalCodec(t *testing.T) {
 	}
 }
 
-func TestGetTuneParameter(t *testing.T) {
-	tests := []struct {
-		contentType ContentType
-		expected    string
-	}{
-		{ContentTypeAnimation, "animation"},
-		{ContentTypeScreencast, "stillimage"},
-		{ContentTypeGaming, "grain"},
-		{ContentTypeSportsAction, "zerolatency"},
-		{ContentTypeLiveAction, "film"},
-		{ContentTypeDocumentary, "film"},
-		{ContentTypeUnknown, "film"},
+// Test_GetCompressionSettings tests the GetCompressionSettings function
+func Test_GetCompressionSettings(t *testing.T) {
+	// Create mocks
+	ffmpegMock := &ffmpeg.FFmpeg{}
+	analyzer := NewContentAnalyzer(ffmpegMock, nil)
+	
+	// Create sample analysis for a screencast
+	screencastAnalysis := &VideoAnalysis{
+		VideoFile: &ffmpeg.VideoFile{
+			Path:     "test.mp4",
+			VideoInfo: ffmpeg.VideoStreamInfo{
+				Width:   1920,
+				Height:  1080,
+				FPS:     30.0,
+			},
+			AudioInfo: []ffmpeg.AudioStreamInfo{
+				{
+					Codec:   "aac",
+					Bitrate: 128000,
+				},
+			},
+			Duration: 60.0,
+		},
+		ContentType:          ContentTypeScreencast,
+		MotionComplexity:     MotionComplexityLow,
+		IsHDContent:          true,
+		RecommendedCodec:     "hevc",
+		OptimalBitrate:       2000000,
+		CompressionPotential: 80,
 	}
+	
+	// Test with different quality levels
+	testCases := []struct {
+		name         string
+		analysis     *VideoAnalysis
+		qualityLevel int
+		expectCodec  string
+		expectPreset string
+	}{
+		{
+			name:         "Screencast with quality 1 (max compression)",
+			analysis:     screencastAnalysis,
+			qualityLevel: 1,
+			expectCodec:  "libx265",
+			expectPreset: "slower",
+		},
+		{
+			name:         "Screencast with quality 5 (max quality)",
+			analysis:     screencastAnalysis,
+			qualityLevel: 5,
+			expectCodec:  "libx265",
+			expectPreset: "ultrafast",
+		},
+	}
+	
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			settings, err := analyzer.GetCompressionSettings(tc.analysis, tc.qualityLevel)
+			
+			// Assert no error
+			assert.NoError(t, err)
+			// Assert map is not nil
+			assert.NotNil(t, settings)
+			// Assert expected codec
+			assert.Equal(t, tc.expectCodec, settings["codec"])
+			// Assert expected preset
+			assert.Equal(t, tc.expectPreset, settings["preset"])
+			// Assert CRF is set
+			assert.NotEmpty(t, settings["crf"])
+		})
+	}
+	
+	// Test with different content types
+	liveActionAnalysis := &VideoAnalysis{
+		VideoFile: &ffmpeg.VideoFile{
+			Path:     "movie.mp4",
+			VideoInfo: ffmpeg.VideoStreamInfo{
+				Width:   1280,
+				Height:  720,
+				FPS:     24.0,
+			},
+			AudioInfo: []ffmpeg.AudioStreamInfo{
+				{
+					Codec:   "aac",
+					Bitrate: 192000,
+				},
+			},
+			Duration: 300.0,
+		},
+		ContentType:          ContentTypeLiveAction,
+		MotionComplexity:     MotionComplexityHigh,
+		IsHDContent:          true,
+		RecommendedCodec:     "h264",
+		OptimalBitrate:       3000000,
+		CompressionPotential: 40,
+	}
+	
+	gamingAnalysis := &VideoAnalysis{
+		VideoFile: &ffmpeg.VideoFile{
+			Path:     "game.mp4",
+			VideoInfo: ffmpeg.VideoStreamInfo{
+				Width:   1920,
+				Height:  1080,
+				FPS:     60.0,
+			},
+			AudioInfo: []ffmpeg.AudioStreamInfo{
+				{
+					Codec:   "aac",
+					Bitrate: 192000,
+				},
+			},
+			Duration: 120.0,
+		},
+		ContentType:          ContentTypeGaming,
+		MotionComplexity:     MotionComplexityHigh,
+		IsHDContent:          true,
+		RecommendedCodec:     "h264",
+		OptimalBitrate:       5000000,
+		CompressionPotential: 30,
+	}
+	
+	contentTypeTests := []struct {
+		name         string
+		analysis     *VideoAnalysis
+		qualityLevel int
+		expectCodec  string
+	}{
+		{
+			name:         "Live Action content",
+			analysis:     liveActionAnalysis,
+			qualityLevel: 3,
+			expectCodec:  "libx264",
+		},
+		{
+			name:         "Gaming content",
+			analysis:     gamingAnalysis,
+			qualityLevel: 3,
+			expectCodec:  "libx264",
+		},
+	}
+	
+	for _, tc := range contentTypeTests {
+		t.Run(tc.name, func(t *testing.T) {
+			settings, err := analyzer.GetCompressionSettings(tc.analysis, tc.qualityLevel)
+			
+			// Assert no error
+			assert.NoError(t, err)
+			// Assert map is not nil
+			assert.NotNil(t, settings)
+			// Assert expected codec
+			assert.Equal(t, tc.expectCodec, settings["codec"])
+			
+			// For live action, tune should be "film"
+			if tc.analysis.ContentType == ContentTypeLiveAction {
+				assert.Equal(t, "film", settings["tune"])
+			}
+			
+			// For gaming, profile should be "high"
+			if tc.analysis.ContentType == ContentTypeGaming {
+				assert.Equal(t, "high", settings["profile"])
+			}
+		})
+	}
+	
+	// Test error cases
+	t.Run("Nil analysis", func(t *testing.T) {
+		settings, err := analyzer.GetCompressionSettings(nil, 3)
+		assert.Error(t, err)
+		assert.Nil(t, settings)
+	})
+}
 
-	for _, test := range tests {
-		result := getTuneParameter(test.contentType)
-		if result != test.expected {
-			t.Errorf("getTuneParameter(%s): expected %s, got %s", 
-				test.contentType, test.expected, result)
-		}
+// Test_SelectCodec tests the selectCodec function
+func Test_SelectCodec(t *testing.T) {
+	// Create analyzer
+	analyzer := NewContentAnalyzer(nil, nil)
+	
+	tests := []struct {
+		name        string
+		contentType ContentType
+		expectCodec string
+	}{
+		{
+			name:        "Screencast content",
+			contentType: ContentTypeScreencast,
+			expectCodec: "libx265",
+		},
+		{
+			name:        "Animation content",
+			contentType: ContentTypeAnimation,
+			expectCodec: "libx265",
+		},
+		{
+			name:        "Gaming content",
+			contentType: ContentTypeGaming,
+			expectCodec: "libx264",
+		},
+		{
+			name:        "Live Action content",
+			contentType: ContentTypeLiveAction,
+			expectCodec: "libx264",
+		},
+		{
+			name:        "Documentary content",
+			contentType: ContentTypeDocumentary,
+			expectCodec: "libx264",
+		},
+	}
+	
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			codec := analyzer.selectCodec(tc.contentType)
+			assert.Equal(t, tc.expectCodec, codec)
+		})
+	}
+}
+
+// Test_CalculateCRF tests the calculateCRF function
+func Test_CalculateCRF(t *testing.T) {
+	// Create analyzer
+	analyzer := NewContentAnalyzer(nil, nil)
+	
+	tests := []struct {
+		name             string
+		contentType      ContentType
+		motionComplexity MotionComplexity
+		qualityLevel     int
+		expectCRFInRange []string
+	}{
+		{
+			name:             "Screencast with low motion at quality 3",
+			contentType:      ContentTypeScreencast,
+			motionComplexity: MotionComplexityLow,
+			qualityLevel:     3,
+			expectCRFInRange: []string{"28", "30", "32"},
+		},
+		{
+			name:             "Live Action with high motion at quality 5",
+			contentType:      ContentTypeLiveAction,
+			motionComplexity: MotionComplexityHigh,
+			qualityLevel:     5,
+			expectCRFInRange: []string{"18", "19", "20"},
+		},
+	}
+	
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			crf := analyzer.calculateCRF(tc.contentType, tc.motionComplexity, tc.qualityLevel)
+			assert.Contains(t, tc.expectCRFInRange, crf)
+		})
 	}
 } 
