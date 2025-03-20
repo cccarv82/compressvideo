@@ -65,7 +65,7 @@ func init() {
 	rootCmd.MarkFlagRequired("input")
 
 	// Define optional flags
-	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file (default: input-compressed.ext)")
+	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file (default: input_compressed.ext)")
 	rootCmd.Flags().IntVarP(&quality, "quality", "q", 3, "Quality level (1-5, 1=max compression, 5=max quality)")
 	rootCmd.Flags().StringVarP(&preset, "preset", "p", "balanced", "Compression preset (fast, balanced, thorough)")
 	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file if it exists")
@@ -107,7 +107,7 @@ func validateFlags() error {
 		// Generate output filename if not provided
 		ext := filepath.Ext(inputFile)
 		base := strings.TrimSuffix(inputFile, ext)
-		outputFile = base + "-compressed" + ext
+		outputFile = filepath.Join(filepath.Dir(inputFile), base+"_compressed"+ext)
 	}
 
 	return nil
@@ -131,7 +131,7 @@ func process(cmd *cobra.Command, args []string) error {
 		ext := filepath.Ext(inputFile)
 		base := filepath.Base(inputFile)
 		base = strings.TrimSuffix(base, ext)
-		outputFile = filepath.Join(dir, base+"-compressed"+ext)
+		outputFile = filepath.Join(dir, base+"_compressed"+ext)
 	}
 	
 	logger.Section("Processing Video")
@@ -528,7 +528,7 @@ func executeCompression() error {
 	// If output file is not specified, use default naming
 	if outputFile == "" {
 		ext := filepath.Ext(inputFile)
-		outputFile = strings.TrimSuffix(inputFile, ext) + "-compressed" + ext
+		outputFile = strings.TrimSuffix(inputFile, ext) + "_compressed" + ext
 	}
 	
 	logger.Info("Arquivo de saída: %s", outputFile)
