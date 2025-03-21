@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.4] - Correção de Bug nas Configurações de Redimensionamento
+
+### Corrigido
+- Resolvido erro de compressão quando usando preset "thorough" com qualidade 1 ou 2
+- Corrigido cálculo de largura proporcional para vídeos redimensionados, evitando largura igual a zero
+- Ajustada a lógica de aplicação de bitrate vs. CRF para presets de alta qualidade
+- Melhorada a compatibilidade com diferentes proporções de aspecto de vídeo
+
 ## [1.3.3] - Melhorias na Interface de Usuário
 
 ### Melhorado

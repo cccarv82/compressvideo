@@ -590,7 +590,18 @@ func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *
 		// Para máxima compressão, podemos reduzir a resolução
 		if video.Height > 720 {
 			settings.MaxHeight = 720
-			settings.MaxWidth = 0 // Manter proporção
+			// Não usar 0 para a largura para evitar problemas com o FFmpeg
+			// Calcular a largura proporcional com base na altura original e na nova altura
+			if video.Width > 0 && video.Height > 0 {
+				// Calcular a proporção e aplicar à nova altura
+				aspectRatio := float64(video.Width) / float64(video.Height)
+				settings.MaxWidth = int(float64(settings.MaxHeight) * aspectRatio)
+				// Garantir que a largura seja um número par (requisito de alguns codecs)
+				settings.MaxWidth = settings.MaxWidth - (settings.MaxWidth % 2)
+			} else {
+				// Fallback seguro se não tivermos dimensões válidas
+				settings.MaxWidth = 1280 // Largura comum para 720p (proporção 16:9)
+			}
 		}
 	case 2: // Alta compressão
 		settings.CRF = 26
@@ -598,7 +609,16 @@ func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *
 		settings.TargetBitrate = 2000000 // 2 Mbps
 		if video.Height > 1080 {
 			settings.MaxHeight = 1080
-			settings.MaxWidth = 0
+			// Calcular a largura proporcional da mesma forma que para qualidade 1
+			if video.Width > 0 && video.Height > 0 {
+				aspectRatio := float64(video.Width) / float64(video.Height)
+				settings.MaxWidth = int(float64(settings.MaxHeight) * aspectRatio)
+				// Garantir que a largura seja um número par
+				settings.MaxWidth = settings.MaxWidth - (settings.MaxWidth % 2)
+			} else {
+				// Fallback seguro
+				settings.MaxWidth = 1920 // Largura comum para 1080p (proporção 16:9)
+			}
 		}
 	case 3: // Balanceado (padrão)
 		settings.CRF = 23
@@ -624,6 +644,11 @@ func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *
 		settings.Preset = "faster"
 	case "thorough":
 		settings.Preset = "slow"
+		// Se estivermos usando bitrate alvo com qualidade baixa e preset thorough,
+		// é melhor remover o bitrate alvo para evitar conflitos
+		if quality <= 2 {
+			settings.TargetBitrate = 0 // Deixar o CRF controlar a qualidade
+		}
 	}
 	
 	return settings
