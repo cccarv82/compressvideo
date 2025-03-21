@@ -29,4 +29,18 @@ go.work
 Thumbs.db
 
 # Test data directory
-data/ 
+data/
+
+# Test scenario and output directories 
+test_scenario/
+new_test/
+test_nested/
+test_dir/
+
+# Log files
+*.log
+
+# Compressed video files (uncomment if you want to ignore all compressed videos)
+# *-compressed.mp4
+# *-compressed.mkv
+# *-compressed.avi 
