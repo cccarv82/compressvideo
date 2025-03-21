@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.5] - Correção Adicional para o Processamento de Vídeo
+
+### Corrigido
+- Resolvido problema persistente com erro "exit status 0xabafb00" ao usar preset "thorough" e qualidade 1
+- Melhorado o tratamento de filtros de escala para evitar configurações inválidas no FFmpeg
+- Corrigido formato dos comandos FFmpeg para garantir compatibilidade em diferentes cenários
+- Adicionado log detalhado para facilitar diagnóstico de erros no processamento de vídeo
+
 ## [1.3.4] - Correção de Bug nas Configurações de Redimensionamento
 
 ### Corrigido
