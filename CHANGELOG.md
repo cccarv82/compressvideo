@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.7] - Correção da Interface de Progresso e Cálculo de Tamanho
+
+### Corrigido
+- Restaurada a barra de progresso durante a compressão de vídeo
+- Corrigido cálculo de tamanhos de arquivo original e final
+- Melhorada exibição de porcentagem de redução de tamanho
+- Interface de usuário volta a exibir informações detalhadas durante o processo
+- Mantida a correção para o erro "Stderr already set"
+
 ## [1.3.6] - Correção para Erros de Execução do FFmpeg
 
 ### Corrigido

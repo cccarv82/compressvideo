@@ -353,22 +353,69 @@ func (f *FFmpeg) CalculateFrameComplexity(filePath string) (float64, error) {
 
 // Execute executes the FFmpeg command
 func (ffmpeg *FFmpeg) Execute() error {
+	// Verificar se o FFmpeg está instalado
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		ffmpeg.Logger.Error("Falha ao verificar FFmpeg: %v", err)
+		ffmpeg.Logger.Info("Tente executar 'compressvideo repair-ffmpeg' para corrigir problemas com o FFmpeg")
+		return fmt.Errorf("falha ao inicializar FFmpeg: %v", err)
+	}
+	
+	// Caminho para o FFmpeg
+	ffmpegPath := ffmpegInfo.Path
+	
+	// Obter informações do vídeo original
 	video, err := ffmpeg.GetVideoInfo(ffmpeg.InputFile)
 	if err != nil {
-		return fmt.Errorf("failed to get video info: %w", err)
+		// No Windows, erros com código hexadecimal podem indicar problemas com o FFprobe
+		if strings.Contains(err.Error(), "0x") || strings.Contains(err.Error(), "exit status") {
+			ffmpeg.Logger.Error("Erro ao executar FFprobe. Isso pode indicar um problema com a instalação do FFmpeg.")
+			ffmpeg.Logger.Info("Tente executar 'compressvideo repair-ffmpeg' para corrigir problemas com o FFmpeg")
+		}
+		return fmt.Errorf("falha ao obter informações do vídeo: %v", err)
 	}
 
-	// Calculate optimal encoding settings
-	settings := ffmpeg.calculateEncodingSettings(&VideoInfo{
-		Width:     video.VideoInfo.Width,
-		Height:    video.VideoInfo.Height,
-		FrameRate: video.VideoInfo.FPS,
-		Duration:  video.Duration,
-		BitRate:   video.BitRate,
-		CodecName: video.VideoInfo.Codec,
-	}, ffmpeg.Options.Quality)
+	// Criar uma estrutura VideoInfo a partir do VideoFile para compatibilidade
+	videoInfo := &VideoInfo{
+		Width:      video.VideoInfo.Width,
+		Height:     video.VideoInfo.Height,
+		FrameRate:  video.VideoInfo.FPS,
+		Duration:   video.Duration,
+		BitRate:    video.BitRate,
+		CodecName:  video.VideoInfo.Codec,
+		Resolution: fmt.Sprintf("%dx%d", video.VideoInfo.Width, video.VideoInfo.Height),
+	}
+	
+	// Exibir informações do vídeo
+	ffmpeg.Logger.Info("Informações do vídeo:")
+	ffmpeg.Logger.Info("  Resolução: %dx%d", videoInfo.Width, videoInfo.Height)
+	ffmpeg.Logger.Info("  Codec: %s", videoInfo.CodecName)
+	ffmpeg.Logger.Info("  Duração: %.2f segundos", videoInfo.Duration)
+	if videoInfo.BitRate > 0 {
+		ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(videoInfo.BitRate)/1024/1024)
+	}
+	
+	// Calcular configurações de compressão com base na qualidade
+	settings := ffmpeg.calculateEncodingSettings(videoInfo, ffmpeg.Options.Quality)
 
-	// Build the FFmpeg command
+	// Exibir configurações de compressão
+	ffmpeg.Logger.Info("Configurações de compressão:")
+	ffmpeg.Logger.Info("  Codec: %s", settings.VideoCodec)
+	ffmpeg.Logger.Info("  CRF: %d", settings.CRF)
+	ffmpeg.Logger.Info("  Preset: %s", settings.Preset)
+	if settings.MaxWidth > 0 || settings.MaxHeight > 0 {
+		ffmpeg.Logger.Info("  Escala: %dx%d", settings.MaxWidth, settings.MaxHeight)
+	}
+	if settings.TargetBitrate > 0 {
+		ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(settings.TargetBitrate)/1024/1024)
+	} else {
+		ffmpeg.Logger.Info("  Bitrate: Automático (controlado pelo CRF)")
+	}
+	
+	// Iniciar compressão
+	ffmpeg.Logger.Info("Iniciando compressão do vídeo...")
+	
+	// Construir comando FFmpeg
 	args := ffmpeg.buildFFmpegCommand(settings)
 
 	// Add input and output files
@@ -377,32 +424,101 @@ func (ffmpeg *FFmpeg) Execute() error {
 	args = append(args, "-y", ffmpeg.OutputFile)
 
 	// Log the full command for debugging
-	ffmpeg.Logger.Debug("Executando comando FFmpeg: ffmpeg %s", strings.Join(args, " "))
+	ffmpeg.Logger.Debug("Executando comando FFmpeg: %s %s", ffmpegPath, strings.Join(args, " "))
 
-	// Obter o caminho para o FFmpeg
-	ffmpegInfo, err := util.FindFFmpeg()
-	if err != nil {
-		return fmt.Errorf("falha ao encontrar FFmpeg: %v", err)
-	}
-	
-	ffmpegPath := ffmpegInfo.Path
-
-	// Execute the command - use Run() with separate stdout/stderr capture
+	// Execute the command with progress monitoring
 	cmd := exec.Command(ffmpegPath, args...)
 	
-	// Capture stdout and stderr
+	// Configurar buffers para stdout e stderr
 	var stdoutBuf, stderrBuf bytes.Buffer
 	cmd.Stdout = &stdoutBuf
-	cmd.Stderr = &stderrBuf
 	
-	// Run the command
-	err = cmd.Run()
+	// Configurar captura de stderr para progresso
+	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		ffmpeg.Logger.Error("Comando FFmpeg completo: %s %s", ffmpegPath, strings.Join(args, " "))
-		ffmpeg.Logger.Error("Saída de erro do FFmpeg: %s", stderrBuf.String())
-		return fmt.Errorf("FFmpeg failed: %w", err)
+		return fmt.Errorf("falha ao capturar saída de erro: %v", err)
 	}
 
+	// Iniciar comando
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("falha ao iniciar FFmpeg: %v", err)
+	}
+
+	// Mostrar progresso
+	progressTracker := util.NewProgressTrackerWithOptions(util.ProgressTrackerOptions{
+		Total:          100, // Total de 100% em vez da duração
+		Description:    "Comprimindo vídeo",
+		Logger:         ffmpeg.Logger,
+		ShowPercentage: true,
+		ShowSpeed:      false,
+	})
+
+	// Ler stderr para mostrar progresso
+	buf := make([]byte, 2048)
+	lastProgress := int64(0)
+	
+	// Capturar a saída de stderr para mostrar o progresso e armazenar em stderrBuf
+	go func() {
+		for {
+			n, err := stderr.Read(buf)
+			if n == 0 || err != nil {
+				break
+			}
+			
+			output := string(buf[:n])
+			stderrBuf.WriteString(output)
+			
+			// Procurar por informações de tempo em qualquer parte da saída
+			timeMatch := strings.Index(output, "time=")
+			if timeMatch != -1 {
+				// Encontrar o fim da string de tempo (até o espaço)
+				endIdx := timeMatch + 5
+				for endIdx < len(output) && output[endIdx] != ' ' {
+					endIdx++
+				}
+				
+				if endIdx > timeMatch+5 {
+					timeStr := output[timeMatch+5:endIdx]
+					timeStr = strings.TrimSpace(timeStr)
+					
+					// Parse time in HH:MM:SS format
+					if len(timeStr) >= 8 { // Garantir que tem pelo menos "HH:MM:SS"
+						currentTime := parseFFmpegTime(timeStr)
+						
+						if currentTime > 0 && videoInfo.Duration > 0 {
+							// Calcular percentual em vez de usar o tempo diretamente
+							percentComplete := int64((currentTime / videoInfo.Duration) * 100.0)
+							if percentComplete > 100 {
+								percentComplete = 100
+							}
+							
+							// Só atualizar se houver mudança significativa ou for o final
+							if percentComplete > lastProgress || percentComplete >= 100 {
+								progressTracker.Update(percentComplete)
+								lastProgress = percentComplete
+							}
+						}
+					}
+				}
+			}
+			
+			// Mostrar erro detalhado em modo verbose
+			if ffmpeg.Logger.IsVerbose() && strings.Contains(strings.ToLower(output), "error") {
+				ffmpeg.Logger.Debug("FFmpeg: %s", output)
+			}
+		}
+	}()
+	
+	// Aguardar comando finalizar
+	err = cmd.Wait()
+	if err != nil {
+		// Extrair a mensagem de erro da saída de stderr
+		errorMsg := stderrBuf.String()
+		return fmt.Errorf("FFmpeg falhou: %v\nDetalhes: %s", err, errorMsg)
+	}
+	
+	progressTracker.Finish()
+	
 	return nil
 }
 
