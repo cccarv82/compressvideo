@@ -103,15 +103,15 @@ func validateFlags() error {
 
 	// If input is a file, validate output file
 	if !fileInfo.IsDir() {
-		if outputFile != "" {
-			// Check if output file already exists and not force flag
-			if _, err := os.Stat(outputFile); err == nil && !force {
-				return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
-			}
-		} else {
-			// Generate output filename if not provided
-			ext := filepath.Ext(inputFile)
-			base := strings.TrimSuffix(inputFile, ext)
+	if outputFile != "" {
+		// Check if output file already exists and not force flag
+		if _, err := os.Stat(outputFile); err == nil && !force {
+			return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
+		}
+	} else {
+		// Generate output filename if not provided
+		ext := filepath.Ext(inputFile)
+		base := strings.TrimSuffix(inputFile, ext)
 			outputFile = filepath.Join(filepath.Dir(inputFile), base+"_compressed"+ext)
 		}
 	} else if outputFile != "" {
@@ -441,12 +441,12 @@ func processSingleFile(inputFile, outputFile string) error {
 	// Compress the video
 	logger.Info("Starting video compression...")
 	result, err := videoCompressor.CompressVideo(
-		inputFile, 
+		inputFile,
 		outputFile, 
-		analysis, 
+		analysis,
 		settings, 
-		quality, 
-		preset, 
+		quality,
+		preset,
 		progressTracker,
 	)
 	
@@ -470,9 +470,9 @@ func processSingleFile(inputFile, outputFile string) error {
 	// Save report to file if verbose
 	if verbose {
 		reportPath, err := reportGen.SaveReportToFile(report)
-		if err != nil {
+	if err != nil {
 			logger.Warning("Failed to save report: %v", err)
-		} else {
+	} else {
 			logger.Info("Detailed report saved to: %s", reportPath)
 		}
 	}
