@@ -444,7 +444,13 @@ func (ffmpeg *FFmpeg) Execute() error {
 	}
 	
 	// Mostrar progresso
-	progressTracker := util.NewProgressTracker(int64(videoInfo.Duration), "Comprimindo vídeo", ffmpeg.Logger)
+	progressTracker := util.NewProgressTrackerWithOptions(util.ProgressTrackerOptions{
+		Total:          100, // Total de 100% em vez da duração
+		Description:    "Comprimindo vídeo",
+		Logger:         ffmpeg.Logger,
+		ShowPercentage: true,
+		ShowSpeed:      false,
+	})
 	
 	// Ler stderr para mostrar progresso
 	scanner := bufio.NewScanner(stderr)
@@ -458,8 +464,14 @@ func (ffmpeg *FFmpeg) Execute() error {
 			if timeIndex >= 0 {
 				timeStr := line[timeIndex+5 : timeIndex+16] // formato: HH:MM:SS.ms
 				currentTime := parseFFmpegTime(timeStr)
-				if currentTime > 0 {
-					progressTracker.Update(int64(currentTime))
+				
+				if currentTime > 0 && videoInfo.Duration > 0 {
+					// Calcular percentual em vez de usar o tempo diretamente
+					percentComplete := int64((currentTime / videoInfo.Duration) * 100.0)
+					if percentComplete > 100 {
+						percentComplete = 100
+					}
+					progressTracker.Update(percentComplete)
 				}
 			}
 		}

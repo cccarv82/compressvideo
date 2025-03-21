@@ -224,20 +224,27 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			// Parse time information from FFmpeg output
 			timeMatch := strings.Index(output, "time=")
 			if timeMatch != -1 {
-				timeStr := output[timeMatch+5 : timeMatch+16]
-				timeStr = strings.TrimSpace(timeStr)
-				// Parse time in HH:MM:SS format
-				parts := strings.Split(timeStr, ":")
-				if len(parts) == 3 {
-					hours, _ := strconv.Atoi(parts[0])
-					minutes, _ := strconv.Atoi(parts[1])
-					seconds, _ := strconv.ParseFloat(parts[2], 64)
-					currentTime := float64(hours*3600) + float64(minutes*60) + seconds
-					
-					// Update progress
-					percentComplete := int64((currentTime / totalDuration) * 100)
-					if percentComplete <= 100 {
-						progress.Update(percentComplete)
+				// Encontrar o fim da string de tempo (até o espaço)
+				endPos := strings.Index(output[timeMatch+5:], " ")
+				if endPos > 0 {
+					timeStr := output[timeMatch+5 : timeMatch+5+endPos]
+					timeStr = strings.TrimSpace(timeStr)
+					// Parse time in HH:MM:SS format
+					parts := strings.Split(timeStr, ":")
+					if len(parts) == 3 {
+						hours, _ := strconv.Atoi(parts[0])
+						minutes, _ := strconv.Atoi(parts[1])
+						seconds, _ := strconv.ParseFloat(parts[2], 64)
+						currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+						
+						// Update progress
+						if totalDuration > 0 {
+							percentComplete := int64((currentTime / totalDuration) * 100)
+							if percentComplete > 100 {
+								percentComplete = 100
+							}
+							progress.Update(percentComplete)
+						}
 					}
 				}
 			}
@@ -300,14 +307,21 @@ func (vc *VideoCompressor) compressVideoParallel(inputFile, outputFile string, s
 	
 	// Start a goroutine to aggregate progress updates
 	go func() {
-		total := 0
-		count := 0
-		for p := range progressChan {
-			total += p
-			count++
-			// Each segment contributes 1/numSegments of the total progress
-			// 90% for compression, 10% reserved for the final merge
-			avgProgress := int64(float64(total) / float64(count*100) * 90)
+		segmentProgress := make([]int, len(segments))
+		for progressUpdate := range progressChan {
+			segmentID := progressUpdate >> 16    // Primeiros 16 bits contêm o ID do segmento
+			progressValue := progressUpdate & 0xFFFF  // Últimos 16 bits contêm o valor do progresso
+			
+			segmentProgress[segmentID] = progressValue
+			
+			// Calcular o progresso médio de todos os segmentos
+			totalProgress := 0
+			for _, p := range segmentProgress {
+				totalProgress += p
+			}
+			
+			// 90% para compressão, 10% reservado para a fusão final
+			avgProgress := int64(float64(totalProgress) / float64(len(segments) * 100) * 90)
 			if avgProgress < 90 {
 				progress.Update(avgProgress)
 			}
@@ -422,6 +436,9 @@ func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDurat
 
 // compressSegment compresses a single video segment
 func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, settings map[string]string, progress progressReporter) error {
+	// Rastrear o último progresso reportado para limitar atualizações
+	var lastProgressReported int
+	
 	// Obter o caminho para o FFmpeg
 	ffmpegInfo, err := util.FindFFmpeg()
 	if err != nil {
@@ -467,20 +484,33 @@ func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, setting
 			// Parse time information from FFmpeg output
 			timeMatch := strings.Index(output, "time=")
 			if timeMatch != -1 {
-				timeStr := output[timeMatch+5 : timeMatch+16]
-				timeStr = strings.TrimSpace(timeStr)
-				// Parse time in HH:MM:SS format
-				parts := strings.Split(timeStr, ":")
-				if len(parts) == 3 {
-					hours, _ := strconv.Atoi(parts[0])
-					minutes, _ := strconv.Atoi(parts[1])
-					seconds, _ := strconv.ParseFloat(parts[2], 64)
-					currentTime := float64(hours*3600) + float64(minutes*60) + seconds
-					
-					// Update progress for this segment
-					percentComplete := int((currentTime / totalDuration) * 100)
-					if percentComplete <= 100 {
-						progress.reportProgress(percentComplete)
+				// Encontrar o fim da string de tempo (até o espaço)
+				endPos := strings.Index(output[timeMatch+5:], " ")
+				if endPos > 0 {
+					timeStr := output[timeMatch+5 : timeMatch+5+endPos]
+					timeStr = strings.TrimSpace(timeStr)
+					// Parse time in HH:MM:SS format
+					parts := strings.Split(timeStr, ":")
+					if len(parts) == 3 {
+						hours, _ := strconv.Atoi(parts[0])
+						minutes, _ := strconv.Atoi(parts[1])
+						seconds, _ := strconv.ParseFloat(parts[2], 64)
+						currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+						
+						// Update progress for this segment
+						if totalDuration > 0 {
+							percentComplete := int((currentTime / totalDuration) * 100)
+							if percentComplete > 100 {
+								percentComplete = 100
+							}
+							
+							// Limitar a frequência das atualizações de progresso
+							// para evitar sobrecarga em arquivos grandes
+							if percentComplete > lastProgressReported+1 || percentComplete >= 100 {
+								progress.reportProgress(percentComplete)
+								lastProgressReported = percentComplete
+							}
+						}
 					}
 				}
 			}
@@ -669,7 +699,10 @@ type segmentProgressTracker struct {
 }
 
 func (spt *segmentProgressTracker) reportProgress(progress int) {
-	spt.progressChan <- progress
+	// Combinar segmentID e progress em um único inteiro
+	// Os primeiros 16 bits representam o segmentID, os últimos 16 bits representam o progresso
+	combinedProgress := (spt.segmentID << 16) | progress
+	spt.progressChan <- combinedProgress
 }
 
 func (vc *VideoCompressor) compressVideoWithTwoPass(inputFile, outputFile string, settings map[string]string, progress *util.ProgressTracker) error {

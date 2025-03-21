@@ -1,6 +1,19 @@
 # Changelog
 
-## [1.2.0] - Robustez e Confiabilidade
+## [1.2.3] - Melhorias na Barra de Progresso
+
+### Corrigido
+- Correção no cálculo de progresso para arquivos grandes
+- Melhor tratamento de progresso para compressão paralela de segmentos
+- Limitação na frequência de atualizações da barra de progresso para evitar sobrecarga
+- Combinação eficiente de progress ID e valor em um único inteiro
+
+### Melhorado
+- Interface de progresso mais responsiva com arquivos grandes
+- Menor sobrecarga de CPU durante a exibição de progresso
+- Melhor feedback visual durante operações de longa duração
+
+## [1.2.2] - Robustez e Confiabilidade
 
 ### Adicionado
 - Comando `repair-ffmpeg` para consertar instalações problemáticas do FFmpeg

@@ -198,8 +198,12 @@ func Test_GetCompressionSettings(t *testing.T) {
 			},
 			AudioInfo: []ffmpeg.AudioStreamInfo{
 				{
-					Codec:   "aac",
-					Bitrate: 128000,
+					Index:      0,
+					Codec:      "aac",
+					Channels:   2,
+					SampleRate: 44100,
+					BitRate:    128000,
+					Language:   "eng",
 				},
 			},
 			Duration: 60.0,
@@ -264,8 +268,12 @@ func Test_GetCompressionSettings(t *testing.T) {
 			},
 			AudioInfo: []ffmpeg.AudioStreamInfo{
 				{
-					Codec:   "aac",
-					Bitrate: 192000,
+					Index:      0,
+					Codec:      "aac",
+					Channels:   2,
+					SampleRate: 44100,
+					BitRate:    192000,
+					Language:   "eng",
 				},
 			},
 			Duration: 300.0,
@@ -288,8 +296,12 @@ func Test_GetCompressionSettings(t *testing.T) {
 			},
 			AudioInfo: []ffmpeg.AudioStreamInfo{
 				{
-					Codec:   "aac",
-					Bitrate: 192000,
+					Index:      0,
+					Codec:      "aac",
+					Channels:   2,
+					SampleRate: 44100,
+					BitRate:    192000,
+					Language:   "eng",
 				},
 			},
 			Duration: 120.0,

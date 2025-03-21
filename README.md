@@ -29,7 +29,7 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - ✅ Extra: Automatic FFmpeg integration
 - ✅ Extra: FFmpeg repair tools and enhanced robustness
 
-CompressVideo v1.2.2 is now available with improved robustness and reliability!
+CompressVideo v1.2.3 is now available with improved robustness and reliability, including fixes for progress reporting with large files!
 
 ## Installation
 
