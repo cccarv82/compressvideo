@@ -1,5 +1,31 @@
 # Changelog
 
+## [1.3.1] - Processamento Recursivo de Diretórios
+
+### Adicionado
+- Flag `-r, --recursive` para processar subdiretórios recursivamente
+- Processamento automático de todos os vídeos em subdiretórios aninhados
+- Suporte para estruturas de diretórios complexas
+- Preservação da estrutura de diretório na saída
+
+### Melhorado
+- Feedback detalhado durante o processamento recursivo
+- Contabilização de arquivos melhorada para diretórios aninhados
+- Documentação atualizada incluindo a nova flag
+
+## [1.3.0] - Suporte a Processamento de Diretórios
+
+### Adicionado
+- Suporte para processamento de todos os vídeos em um diretório quando um diretório é fornecido como entrada
+- Detecção automática de arquivos de vídeo em um diretório
+- Ignorar automaticamente arquivos que já terminam com "-compressed"
+- Suporte para especificar um diretório de saída diferente
+
+### Melhorado
+- Feedback detalhado durante o processamento de múltiplos arquivos
+- Estatísticas de processamento, incluindo contagem de arquivos processados e ignorados
+- Tratamento robusto de caminhos em diferentes sistemas operacionais
+
 ## [1.2.4] - Aprimoramento da Barra de Progresso
 
 ### Corrigido

@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/cccarv82/compressvideo/pkg/analyzer"
 	"github.com/cccarv82/compressvideo/pkg/compressor"
@@ -27,6 +26,7 @@ var (
 	preset  string  // fast, balanced, thorough
 	force   bool    // Overwrite output if exists
 	verbose bool    // Verbose logging
+	recursive bool  // Process directories recursively
 
 	// Logger
 	logger *util.Logger
@@ -61,15 +61,16 @@ func Execute() {
 
 func init() {
 	// Define required flags
-	rootCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input video file (required)")
+	rootCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input video file or directory (required)")
 	rootCmd.MarkFlagRequired("input")
 
 	// Define optional flags
-	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file (default: input_compressed.ext)")
+	rootCmd.Flags().StringVarP(&outputFile, "output", "o", "", "Output file or directory (default: input_compressed.ext or input_compressed directory)")
 	rootCmd.Flags().IntVarP(&quality, "quality", "q", 3, "Quality level (1-5, 1=max compression, 5=max quality)")
 	rootCmd.Flags().StringVarP(&preset, "preset", "p", "balanced", "Compression preset (fast, balanced, thorough)")
-	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file if it exists")
+	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file or directory if it exists")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show verbose output")
+	rootCmd.Flags().BoolVarP(&recursive, "recursive", "r", false, "Process subdirectories recursively when input is a directory")
 	
 	// Add repair-ffmpeg command
 	rootCmd.AddCommand(repairFFmpegCmd)
@@ -77,10 +78,13 @@ func init() {
 
 // validateFlags validates the input flags
 func validateFlags() error {
-	// Validate input file exists
-	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
-		return fmt.Errorf("input file does not exist: %s", inputFile)
+	// Check if inputFile exists
+	fileInfo, err := os.Stat(inputFile)
+	if os.IsNotExist(err) {
+		return fmt.Errorf("input file or directory does not exist: %s", inputFile)
 	}
+
+	// Note: We now check for directory later, so we don't validate file extension here if it's a directory
 
 	// Validate quality level
 	if quality < 1 || quality > 5 {
@@ -97,17 +101,31 @@ func validateFlags() error {
 		return fmt.Errorf("preset must be one of: fast, balanced, thorough (got %s)", preset)
 	}
 
-	// Validate output file
-	if outputFile != "" {
-		// Check if output file already exists and not force flag
-		if _, err := os.Stat(outputFile); err == nil && !force {
-			return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
+	// If input is a file, validate output file
+	if !fileInfo.IsDir() {
+		if outputFile != "" {
+			// Check if output file already exists and not force flag
+			if _, err := os.Stat(outputFile); err == nil && !force {
+				return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
+			}
+		} else {
+			// Generate output filename if not provided
+			ext := filepath.Ext(inputFile)
+			base := strings.TrimSuffix(inputFile, ext)
+			outputFile = filepath.Join(filepath.Dir(inputFile), base+"_compressed"+ext)
 		}
-	} else {
-		// Generate output filename if not provided
-		ext := filepath.Ext(inputFile)
-		base := strings.TrimSuffix(inputFile, ext)
-		outputFile = filepath.Join(filepath.Dir(inputFile), base+"_compressed"+ext)
+	} else if outputFile != "" {
+		// If input is a directory and output is specified, output must be a directory too
+		outputInfo, err := os.Stat(outputFile)
+		if err == nil && !outputInfo.IsDir() {
+			return fmt.Errorf("when input is a directory, output must also be a directory: %s", outputFile)
+		}
+		// Create output directory if it doesn't exist
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(outputFile, 0755); err != nil {
+				return fmt.Errorf("failed to create output directory: %s", err)
+			}
+		}
 	}
 
 	return nil
@@ -125,6 +143,13 @@ func process(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	
+	// Check if input is a directory
+	fileInfo, _ := os.Stat(inputFile)
+	if fileInfo.IsDir() {
+		return processDirectory(inputFile, outputFile)
+	}
+	
+	// Continue with single file processing
 	// Resolve output file if not specified
 	if outputFile == "" {
 		dir := filepath.Dir(inputFile)
@@ -134,7 +159,158 @@ func process(cmd *cobra.Command, args []string) error {
 		outputFile = filepath.Join(dir, base+"_compressed"+ext)
 	}
 	
-	logger.Section("Processing Video")
+	// Process single file
+	return processSingleFile(inputFile, outputFile)
+}
+
+// isVideoFile checks if a file extension matches common video formats
+func isVideoFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	videoExts := map[string]bool{
+		".mp4":  true,
+		".avi":  true,
+		".mkv":  true,
+		".mov":  true,
+		".wmv":  true,
+		".flv":  true,
+		".webm": true,
+		".m4v":  true,
+		".3gp":  true,
+		".ts":   true,
+	}
+	return videoExts[ext]
+}
+
+// hasCompressedSuffix checks if a filename has the "-compressed" suffix
+func hasCompressedSuffix(filename string) bool {
+	base := filepath.Base(filename)
+	ext := filepath.Ext(base)
+	nameWithoutExt := strings.TrimSuffix(base, ext)
+	return strings.HasSuffix(nameWithoutExt, "-compressed")
+}
+
+// processDirectory processes all video files in a directory
+func processDirectory(inputDir, outputDir string) error {
+	logger.Section("Processing Directory")
+	logger.Field("Input Directory", "%s", inputDir)
+	
+	// If output directory is not specified, use the input directory
+	if outputDir == "" {
+		outputDir = inputDir
+	}
+	logger.Field("Output Directory", "%s", outputDir)
+	
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %v", err)
+	}
+	
+	// Read all files in the directory
+	files, err := os.ReadDir(inputDir)
+	if err != nil {
+		return fmt.Errorf("failed to read directory: %v", err)
+	}
+	
+	// Count number of video files to process
+	var videoCount int
+	var processedCount int
+	var skippedCount int
+	var subdirCount int
+	
+	// First pass: count video files
+	for _, file := range files {
+		if file.IsDir() {
+			if recursive {
+				subdirCount++
+			}
+			continue // Skip subdirectories in counting
+		}
+		
+		if isVideoFile(file.Name()) && !hasCompressedSuffix(file.Name()) {
+			videoCount++
+		}
+	}
+	
+	if videoCount == 0 && subdirCount == 0 {
+		logger.Warning("No video files found in the directory")
+		return nil
+	}
+	
+	logger.Info("Found %d video files to process", videoCount)
+	
+	// Process each video file
+	fileIndex := 1 // Track the index of files being processed
+	for _, file := range files {
+		if file.IsDir() {
+			// Process subdirectory if recursive flag is set
+			if recursive {
+				subInputDir := filepath.Join(inputDir, file.Name())
+				subOutputDir := filepath.Join(outputDir, file.Name())
+				
+				logger.Section("Processing subdirectory: %s", file.Name())
+				err := processDirectory(subInputDir, subOutputDir)
+				if err != nil {
+					logger.Error("Error processing subdirectory %s: %v", file.Name(), err)
+				}
+			}
+			continue
+		}
+		
+		filename := file.Name()
+		
+		// Skip non-video files
+		if !isVideoFile(filename) {
+			continue
+		}
+		
+		// Skip already compressed files
+		if hasCompressedSuffix(filename) {
+			logger.Debug("Skipping already compressed file: %s", filename)
+			skippedCount++
+			continue
+		}
+		
+		// Get input and output paths
+		inputFilePath := filepath.Join(inputDir, filename)
+		
+		// Generate output filename
+		ext := filepath.Ext(filename)
+		base := strings.TrimSuffix(filename, ext)
+		outputFilename := base + "-compressed" + ext
+		outputFilePath := filepath.Join(outputDir, outputFilename)
+		
+		// Check if output file already exists
+		if _, err := os.Stat(outputFilePath); err == nil && !force {
+			logger.Warning("Output file already exists (use -f to overwrite): %s", outputFilePath)
+			skippedCount++
+			continue
+		}
+		
+		logger.Section("Processing File %d/%d", fileIndex, videoCount)
+		logger.Field("Input File", "%s", inputFilePath)
+		logger.Field("Output File", "%s", outputFilePath)
+		
+		// Process the file
+		if err := processSingleFile(inputFilePath, outputFilePath); err != nil {
+			logger.Error("Failed to process file %s: %v", inputFilePath, err)
+			continue
+		}
+		
+		processedCount++
+		fileIndex++
+	}
+	
+	logger.Section("Directory Processing Complete")
+	logger.Info("Total files processed: %d/%d", processedCount, videoCount)
+	if skippedCount > 0 {
+		logger.Info("Files skipped: %d", skippedCount)
+	}
+	
+	return nil
+}
+
+// processSingleFile processes a single video file
+func processSingleFile(inputFile, outputFile string) error {
 	logger.Field("Input File", "%s", inputFile)
 	logger.Field("Output File", "%s", outputFile)
 	logger.Field("Quality Level", "%d/5", quality)
@@ -149,7 +325,7 @@ func process(cmd *cobra.Command, args []string) error {
 		logger.Debug("  Force Overwrite: %v", force)
 	}
 	
-	// Check if input file exists
+	// Check if input file exists (should already be validated, but double check)
 	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
 		return fmt.Errorf("input file does not exist: %s", inputFile)
 	}
@@ -185,73 +361,51 @@ func process(cmd *cobra.Command, args []string) error {
 	// Display video information
 	displayVideoInfo(videoFile)
 	
-	// Initialize content analyzer
+	// Create content analyzer
 	contentAnalyzer := analyzer.NewContentAnalyzer(ffmpegUtil, logger)
 	
-	// Analyze video content
-	logger.Section("Video Analysis")
+	// Analyze the video
 	logger.Info("Analyzing video content...")
 	analysis, err := contentAnalyzer.AnalyzeVideo(videoFile)
 	if err != nil {
-		logger.Error("Video analysis failed: %v", err)
+		logger.Error("Failed to analyze video: %v", err)
 		return err
 	}
 	
 	// Display analysis results
 	displayAnalysisResults(analysis)
 	
-	// Get compression settings based on analysis
-	compressionSettings, err := contentAnalyzer.GetCompressionSettings(analysis, quality)
+	// Get compression settings
+	logger.Info("Determining optimal compression settings...")
+	settings, err := contentAnalyzer.GetCompressionSettings(analysis, quality)
 	if err != nil {
 		logger.Error("Failed to determine compression settings: %v", err)
 		return err
 	}
 	
-	// Display recommended settings
-	logger.Info("Recommended compression settings:")
-	for key, value := range compressionSettings {
-		logger.Info("  %s: %s", key, value)
+	// Adjust settings based on preset
+	if preset == "fast" {
+		settings["preset"] = "veryfast"
+	} else if preset == "thorough" {
+		settings["preset"] = "slow"
 	}
 	
-	// Create a new video compressor
+	// Create video compressor
 	videoCompressor := compressor.NewVideoCompressor(ffmpegUtil, contentAnalyzer, logger)
 	
-	// Initialize the report generator
-	reportGenerator := reporter.NewReportGenerator(logger, ffmpegUtil)
+	// Create progress tracker
+	progressTracker := util.NewProgressTracker(100, "Comprimindo vídeo", logger)
 	
-	// Create initial report with basic information
-	report := reportGenerator.CreateReport(inputFile, outputFile, videoFile, analysis)
-	
-	// Create a more advanced progress tracker
-	progressOptions := util.ProgressTrackerOptions{
-		Total:          100,
-		Description:    "Compressing Video",
-		Logger:         logger,
-		ShowPercentage: true,
-		ShowSpeed:      true,
-	}
-	
-	progressBar := util.NewProgressTrackerWithOptions(progressOptions)
-	
-	// Set up status callback for real-time updates
-	progressBar.SetStatusCallback(func(progress int64, timeRemaining time.Duration, rate float64) {
-		logger.Debug("Compression Status: %d%% complete, %.1f seconds remaining", 
-			progress, timeRemaining.Seconds())
-	})
-	
-	// Start compression
-	logger.Section("Compression Process")
-	logger.Info("Starting compression process...")
-	startTime := time.Now()
-	
+	// Compress the video
+	logger.Info("Starting video compression...")
 	result, err := videoCompressor.CompressVideo(
-		inputFile,
+		inputFile, 
 		outputFile, 
-		analysis,
-		compressionSettings,
-		quality,
-		preset,
-		progressBar,
+		analysis, 
+		settings, 
+		quality, 
+		preset, 
+		progressTracker,
 	)
 	
 	if err != nil {
@@ -259,32 +413,27 @@ func process(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	
-	// Ensure progress bar is completed
-	progressBar.Finish()
+	// Create report generator
+	reportGen := reporter.NewReportGenerator(logger, ffmpegUtil)
 	
-	// Complete the report with results
-	report = reportGenerator.FinalizeReport(report, result)
+	// Create initial report
+	report := reportGen.CreateReport(inputFile, outputFile, videoFile, analysis)
 	
-	// Display comprehensive report to console
-	reportGenerator.DisplayReportToConsole(report)
+	// Finalize the report with compression results
+	report = reportGen.FinalizeReport(report, result)
 	
-	// Save report to file
-	reportPath, err := reportGenerator.SaveReportToFile(report)
-	if err != nil {
-		logger.Warning("Failed to save report to file: %v", err)
-	} else {
-		logger.Info("Compression report saved to: %s", reportPath)
+	// Display the report
+	reportGen.DisplayReportToConsole(report)
+	
+	// Save report to file if verbose
+	if verbose {
+		reportPath, err := reportGen.SaveReportToFile(report)
+		if err != nil {
+			logger.Warning("Failed to save report: %v", err)
+		} else {
+			logger.Info("Detailed report saved to: %s", reportPath)
+		}
 	}
-	
-	// Display a user-friendly completion message
-	processingTime := time.Since(startTime).Round(time.Second)
-	savings := fmt.Sprintf("%.1f%%", result.SavedSpacePercent)
-	
-	logger.Success("Video compression completed successfully!")
-	logger.Info("Compressed %s in %s, saving %s of space", 
-		filepath.Base(inputFile), 
-		processingTime, 
-		savings)
 	
 	return nil
 }
@@ -522,9 +671,25 @@ func executeCompression() error {
 	logger.Title("CompressVideo v%s", util.Version)
 	logger.Info("Iniciando compressão de vídeo")
 	
-	// Validate input file
+	// Validate input
+	fileInfo, err := os.Stat(inputFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("o arquivo ou diretório de entrada não existe: %s", inputFile)
+		}
+		return fmt.Errorf("erro ao acessar arquivo ou diretório de entrada: %v", err)
+	}
+	
 	logger.Info("Arquivo de entrada: %s", inputFile)
 	
+	// Check if input is a directory
+	if fileInfo.IsDir() {
+		// Process directory
+		logger.Info("Processando diretório")
+		return processDirectoryCompression(inputFile, outputFile)
+	}
+	
+	// Single file processing
 	// If output file is not specified, use default naming
 	if outputFile == "" {
 		ext := filepath.Ext(inputFile)
@@ -538,6 +703,130 @@ func executeCompression() error {
 		return fmt.Errorf("o arquivo de saída já existe. Use a flag -f para sobrescrever")
 	}
 	
+	// Process the single file
+	return executeSingleFileCompression(inputFile, outputFile)
+}
+
+// processDirectoryCompression processes all video files in a directory
+func processDirectoryCompression(inputDir, outputDir string) error {
+	// If output directory is not specified, use input directory
+	if outputDir == "" {
+		outputDir = inputDir
+	}
+	
+	logger.Info("Diretório de saída: %s", outputDir)
+	
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("falha ao criar diretório de saída: %v", err)
+	}
+	
+	// Read all files in the directory
+	files, err := os.ReadDir(inputDir)
+	if err != nil {
+		return fmt.Errorf("falha ao ler diretório: %v", err)
+	}
+	
+	// Count number of video files to process
+	var videoCount int
+	var processedCount int
+	var skippedCount int
+	var subdirCount int
+	
+	// First pass: count video files
+	for _, file := range files {
+		if file.IsDir() {
+			if recursive {
+				subdirCount++
+			}
+			continue // Skip subdirectories in counting
+		}
+		
+		if isVideoFile(file.Name()) && !hasCompressedSuffix(file.Name()) {
+			videoCount++
+		}
+	}
+	
+	if videoCount == 0 && subdirCount == 0 {
+		logger.Warning("Nenhum arquivo de vídeo encontrado no diretório")
+		return nil
+	}
+	
+	logger.Info("Encontrados %d arquivos de vídeo para processar", videoCount)
+	
+	// Process each video file
+	fileIndex := 1 // Track the index of files being processed
+	for _, file := range files {
+		if file.IsDir() {
+			// Process subdirectory if recursive flag is set
+			if recursive {
+				subInputDir := filepath.Join(inputDir, file.Name())
+				subOutputDir := filepath.Join(outputDir, file.Name())
+				
+				logger.Section("Processando subdiretório: %s", file.Name())
+				err := processDirectoryCompression(subInputDir, subOutputDir)
+				if err != nil {
+					logger.Error("Erro ao processar subdiretório %s: %v", file.Name(), err)
+				}
+			}
+			continue
+		}
+		
+		filename := file.Name()
+		
+		// Skip non-video files
+		if !isVideoFile(filename) {
+			continue
+		}
+		
+		// Skip already compressed files
+		if hasCompressedSuffix(filename) {
+			logger.Debug("Ignorando arquivo já comprimido: %s", filename)
+			skippedCount++
+			continue
+		}
+		
+		// Get input and output paths
+		inputFilePath := filepath.Join(inputDir, filename)
+		
+		// Generate output filename
+		ext := filepath.Ext(filename)
+		base := strings.TrimSuffix(filename, ext)
+		outputFilename := base + "-compressed" + ext
+		outputFilePath := filepath.Join(outputDir, outputFilename)
+		
+		// Check if output file already exists
+		if _, err := os.Stat(outputFilePath); err == nil && !force {
+			logger.Warning("Arquivo de saída já existe (use -f para sobrescrever): %s", outputFilePath)
+			skippedCount++
+			continue
+		}
+		
+		logger.Section("Processando arquivo %d/%d", fileIndex, videoCount)
+		logger.Info("Arquivo de entrada: %s", inputFilePath)
+		logger.Info("Arquivo de saída: %s", outputFilePath)
+		
+		// Process the file
+		if err := executeSingleFileCompression(inputFilePath, outputFilePath); err != nil {
+			logger.Error("Falha ao processar arquivo %s: %v", inputFilePath, err)
+			continue
+		}
+		
+		processedCount++
+		fileIndex++
+	}
+	
+	logger.Section("Processamento de diretório concluído")
+	logger.Info("Total de arquivos processados: %d/%d", processedCount, videoCount)
+	if skippedCount > 0 {
+		logger.Info("Arquivos ignorados: %d", skippedCount)
+	}
+	
+	return nil
+}
+
+// executeSingleFileCompression processes a single video file
+func executeSingleFileCompression(inputFile, outputFile string) error {
 	// Set compression options
 	logger.Info("Qualidade: %d/5", quality)
 	logger.Info("Preset: %s", preset)
