@@ -1,0 +1,8 @@
+[33m[1m====================[0m
+[33m[1mCompressVideo v1.3.1[0m
+[33m[1m====================[0m
+[11:59:24] [34mINFO[0m: [34mIniciando compressão de vídeo
+[11:59:24] [34mINFO[0m: [34mArquivo de entrada: test_scenario
+[11:59:24] [34mINFO[0m: [34mProcessando diretório
+[11:59:24] [34mINFO[0m: [34mDiretório de saída: test_scenario
+[11:59:24] [33mWARNING[0m: [33mNenhum arquivo de vídeo encontrado no diretório

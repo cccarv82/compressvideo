@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.2] - Otimização no Processamento de Diretórios
+
+### Melhorado
+- Lógica aprimorada para ignorar arquivos que já possuem uma versão comprimida correspondente
+- Verificação inteligente de arquivos já processados em diretórios
+- Redução de processamento desnecessário durante a compressão em lote
+
 ## [1.3.1] - Processamento Recursivo de Diretórios
 
 ### Adicionado

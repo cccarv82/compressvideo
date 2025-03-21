@@ -189,6 +189,17 @@ func hasCompressedSuffix(filename string) bool {
 	return strings.HasSuffix(nameWithoutExt, "-compressed")
 }
 
+// hasCompressedVersion checks if a compressed version of the file already exists
+func hasCompressedVersion(filePath string) bool {
+	ext := filepath.Ext(filePath)
+	base := strings.TrimSuffix(filePath, ext)
+	compressedPath := base + "-compressed" + ext
+	
+	// Check if the compressed version exists
+	_, err := os.Stat(compressedPath)
+	return err == nil
+}
+
 // processDirectory processes all video files in a directory
 func processDirectory(inputDir, outputDir string) error {
 	logger.Section("Processing Directory")
@@ -226,7 +237,10 @@ func processDirectory(inputDir, outputDir string) error {
 			continue // Skip subdirectories in counting
 		}
 		
-		if isVideoFile(file.Name()) && !hasCompressedSuffix(file.Name()) {
+		filename := file.Name()
+		filePath := filepath.Join(inputDir, filename)
+		
+		if isVideoFile(filename) && !hasCompressedSuffix(filename) && !hasCompressedVersion(filePath) {
 			videoCount++
 		}
 	}
@@ -272,6 +286,13 @@ func processDirectory(inputDir, outputDir string) error {
 		
 		// Get input and output paths
 		inputFilePath := filepath.Join(inputDir, filename)
+		
+		// Skip files that already have a compressed version
+		if hasCompressedVersion(inputFilePath) {
+			logger.Debug("Skipping file that already has a compressed version: %s", filename)
+			skippedCount++
+			continue
+		}
 		
 		// Generate output filename
 		ext := filepath.Ext(filename)
@@ -742,7 +763,10 @@ func processDirectoryCompression(inputDir, outputDir string) error {
 			continue // Skip subdirectories in counting
 		}
 		
-		if isVideoFile(file.Name()) && !hasCompressedSuffix(file.Name()) {
+		filename := file.Name()
+		filePath := filepath.Join(inputDir, filename)
+		
+		if isVideoFile(filename) && !hasCompressedSuffix(filename) && !hasCompressedVersion(filePath) {
 			videoCount++
 		}
 	}
@@ -788,6 +812,13 @@ func processDirectoryCompression(inputDir, outputDir string) error {
 		
 		// Get input and output paths
 		inputFilePath := filepath.Join(inputDir, filename)
+		
+		// Skip files that already have a compressed version
+		if hasCompressedVersion(inputFilePath) {
+			logger.Debug("Ignorando arquivo que já possui versão comprimida: %s", filename)
+			skippedCount++
+			continue
+		}
 		
 		// Generate output filename
 		ext := filepath.Ext(filename)
