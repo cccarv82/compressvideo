@@ -36,6 +36,8 @@ test_scenario/
 new_test/
 test_nested/
 test_dir/
+test_data/
+test_output/
 
 # Log files
 *.log
