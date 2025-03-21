@@ -29,7 +29,7 @@ A smart video compression CLI tool written in Go that reduces video file sizes b
 - ✅ Extra: Automatic FFmpeg integration
 - ✅ Extra: FFmpeg repair tools and enhanced robustness
 
-CompressVideo v1.2.0 is now available with improved robustness and reliability!
+CompressVideo v1.2.2 is now available with improved robustness and reliability!
 
 ## Installation
 
@@ -79,6 +79,8 @@ Basic usage:
 compressvideo -i input.mp4
 ```
 
+This will automatically generate `input_compressed.mp4` as the output file.
+
 With options:
 
 ```bash
@@ -94,7 +96,7 @@ compressvideo repair-ffmpeg
 ### Available Options
 
 - `-i, --input`: Path to the video file to compress (required)
-- `-o, --output`: Path to save the compressed file (optional, uses same name with suffix if omitted)
+- `-o, --output`: Path to save the compressed file (optional, uses input filename with "_compressed" suffix if omitted, e.g. video.mp4 → video_compressed.mp4)
 - `-q, --quality`: Quality level from 1-5 (1=maximum compression, 5=maximum quality, default=3)
 - `-p, --preset`: Compression preset ("fast", "balanced", "thorough", default="balanced")
 - `-f, --force`: Overwrite output file if it exists
