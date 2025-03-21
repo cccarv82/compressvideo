@@ -379,16 +379,27 @@ func (ffmpeg *FFmpeg) Execute() error {
 	// Log the full command for debugging
 	ffmpeg.Logger.Debug("Executando comando FFmpeg: ffmpeg %s", strings.Join(args, " "))
 
-	// Execute the command
-	cmd := exec.Command("ffmpeg", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	// Execute the command directly
-	output, err := cmd.CombinedOutput()
+	// Obter o caminho para o FFmpeg
+	ffmpegInfo, err := util.FindFFmpeg()
 	if err != nil {
-		ffmpeg.Logger.Error("Comando FFmpeg completo: ffmpeg %s", strings.Join(args, " "))
-		ffmpeg.Logger.Error("Saída de erro do FFmpeg: %s", string(output))
+		return fmt.Errorf("falha ao encontrar FFmpeg: %v", err)
+	}
+	
+	ffmpegPath := ffmpegInfo.Path
+
+	// Execute the command - use Run() with separate stdout/stderr capture
+	cmd := exec.Command(ffmpegPath, args...)
+	
+	// Capture stdout and stderr
+	var stdoutBuf, stderrBuf bytes.Buffer
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+	
+	// Run the command
+	err = cmd.Run()
+	if err != nil {
+		ffmpeg.Logger.Error("Comando FFmpeg completo: %s %s", ffmpegPath, strings.Join(args, " "))
+		ffmpeg.Logger.Error("Saída de erro do FFmpeg: %s", stderrBuf.String())
 		return fmt.Errorf("FFmpeg failed: %w", err)
 	}
 

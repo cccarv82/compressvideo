@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.6] - Correção para Erros de Execução do FFmpeg
+
+### Corrigido
+- Corrigido erro "exec: Stderr already set" ao executar o FFmpeg
+- Melhorada a forma de capturar a saída padrão e de erro do FFmpeg
+- Garantida a utilização correta do caminho do executável FFmpeg
+- Eliminados conflitos na captura dos streams de saída do processo
+
 ## [1.3.5] - Correção Adicional para o Processamento de Vídeo
 
 ### Corrigido
