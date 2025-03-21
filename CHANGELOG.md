@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.4] - Aprimoramento da Barra de Progresso
+
+### Corrigido
+- Corrigido o problema da barra de progresso que não atualizava corretamente
+- Implementado suporte adequado a códigos ANSI para atualização na mesma linha
+- Removidas mensagens de debug que interferiam na visualização da barra de progresso
+
+### Melhorado
+- Barra de progresso agora atualiza na mesma linha para uma interface mais limpa
+- Melhor feedback visual durante o processo de compressão
+- Experiência de usuário aprimorada durante operações de longa duração
+
 ## [1.2.3] - Melhorias na Barra de Progresso
 
 ### Corrigido

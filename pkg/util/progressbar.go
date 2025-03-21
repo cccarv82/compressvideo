@@ -61,6 +61,11 @@ func NewProgressTrackerWithOptions(options ProgressTrackerOptions) *ProgressTrac
 		}),
 		progressbar.OptionEnableColorCodes(true),
 		progressbar.OptionSetRenderBlankState(true),
+		progressbar.OptionClearOnFinish(),
+		progressbar.OptionUseANSICodes(true),
+		progressbar.OptionOnCompletion(func() {
+			fmt.Println()
+		}),
 	}
 
 	// Add optional settings
@@ -137,7 +142,6 @@ func (p *ProgressTracker) Finish() {
 	// Ensure bar shows 100%
 	p.bar.Finish()
 	duration := time.Since(p.startTime).Round(time.Second)
-	fmt.Println() // Add newline after progress bar
 	
 	// Show final stats
 	if p.total > 0 {

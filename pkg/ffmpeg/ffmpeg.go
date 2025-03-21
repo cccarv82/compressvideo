@@ -1,7 +1,6 @@
 package ffmpeg
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -453,32 +452,59 @@ func (ffmpeg *FFmpeg) Execute() error {
 	})
 	
 	// Ler stderr para mostrar progresso
-	scanner := bufio.NewScanner(stderr)
-	for scanner.Scan() {
-		line := scanner.Text()
+	buf := make([]byte, 2048)
+	lastProgress := int64(0)
+	
+	for {
+		n, err := stderr.Read(buf)
+		if n == 0 || err != nil {
+			break
+		}
 		
-		// Procurar por informações de tempo
-		if strings.Contains(line, "time=") {
-			// Parse time
-			timeIndex := strings.Index(line, "time=")
-			if timeIndex >= 0 {
-				timeStr := line[timeIndex+5 : timeIndex+16] // formato: HH:MM:SS.ms
-				currentTime := parseFFmpegTime(timeStr)
+		output := string(buf[:n])
+		
+		// Procurar por informações de tempo em qualquer parte da saída
+		timeMatch := strings.Index(output, "time=")
+		if timeMatch != -1 {
+			// Encontrar o fim da string de tempo (até o espaço)
+			endIdx := timeMatch + 5
+			for endIdx < len(output) && output[endIdx] != ' ' {
+				endIdx++
+			}
+			
+			if endIdx > timeMatch+5 {
+				timeStr := output[timeMatch+5:endIdx]
+				timeStr = strings.TrimSpace(timeStr)
 				
-				if currentTime > 0 && videoInfo.Duration > 0 {
-					// Calcular percentual em vez de usar o tempo diretamente
-					percentComplete := int64((currentTime / videoInfo.Duration) * 100.0)
-					if percentComplete > 100 {
-						percentComplete = 100
+				// Parse time in HH:MM:SS format
+				if len(timeStr) >= 8 { // Garantir que tem pelo menos "HH:MM:SS"
+					currentTime := parseFFmpegTime(timeStr)
+					
+					if currentTime > 0 && videoInfo.Duration > 0 {
+						// Calcular percentual em vez de usar o tempo diretamente
+						percentComplete := int64((currentTime / videoInfo.Duration) * 100.0)
+						if percentComplete > 100 {
+							percentComplete = 100
+						}
+						
+						// Só atualizar se houver mudança significativa ou for o final
+						if percentComplete > lastProgress || percentComplete >= 100 {
+							// Comentamos o debug para evitar interromper a barra de progresso
+							// if ffmpeg.Logger.IsVerbose() && ffmpeg.Logger.Level >= util.LogLevelDebug {
+							//    ffmpeg.Logger.Debug("Progresso: %.2f%% (%.2fs/%.2fs)", 
+							//        float64(percentComplete), currentTime, videoInfo.Duration)
+							// }
+							progressTracker.Update(percentComplete)
+							lastProgress = percentComplete
+						}
 					}
-					progressTracker.Update(percentComplete)
 				}
 			}
 		}
 		
 		// Mostrar erro detalhado em modo verbose
-		if ffmpeg.Logger.IsVerbose() && strings.Contains(strings.ToLower(line), "error") {
-			ffmpeg.Logger.Debug("FFmpeg: %s", line)
+		if ffmpeg.Logger.IsVerbose() && strings.Contains(strings.ToLower(output), "error") {
+			ffmpeg.Logger.Debug("FFmpeg: %s", output)
 		}
 	}
 	
@@ -508,14 +534,38 @@ func DefaultOptions() *Options {
 
 // Analisar tempo do FFmpeg (formato HH:MM:SS.ms)
 func parseFFmpegTime(timeStr string) float64 {
+	// Remover qualquer espaço em branco
+	timeStr = strings.TrimSpace(timeStr)
+	
+	// Verificar se é um formato válido
+	if len(timeStr) < 8 { // Pelo menos HH:MM:SS
+		return 0
+	}
+	
 	parts := strings.Split(timeStr, ":")
 	if len(parts) != 3 {
 		return 0
 	}
 	
-	hours, _ := strconv.ParseFloat(parts[0], 64)
-	minutes, _ := strconv.ParseFloat(parts[1], 64)
-	seconds, _ := strconv.ParseFloat(parts[2], 64)
+	hours, err1 := strconv.ParseFloat(parts[0], 64)
+	minutes, err2 := strconv.ParseFloat(parts[1], 64)
+	
+	// Verificar se a parte dos segundos contém ponto decimal
+	secondsStr := parts[2]
+	
+	// Limitar a parte de segundos até 2 casas decimais para evitar problemas de parsing
+	if idx := strings.Index(secondsStr, "."); idx >= 0 {
+		if len(secondsStr) > idx+3 {
+			secondsStr = secondsStr[:idx+3] // Manter até 2 casas decimais
+		}
+	}
+	
+	seconds, err3 := strconv.ParseFloat(secondsStr, 64)
+	
+	// Verificar se houve algum erro no parsing
+	if err1 != nil || err2 != nil || err3 != nil {
+		return 0
+	}
 	
 	return hours*3600 + minutes*60 + seconds
 }

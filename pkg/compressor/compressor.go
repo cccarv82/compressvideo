@@ -213,7 +213,9 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 	// Monitor progress
 	go func() {
 		// Read FFmpeg output and update progress
-		buf := make([]byte, 1024)
+		buf := make([]byte, 2048)
+		var lastProgressReported int64
+		
 		for {
 			n, err := stderr.Read(buf)
 			if n == 0 || err != nil {
@@ -221,32 +223,57 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			}
 			
 			output := string(buf[:n])
+			
 			// Parse time information from FFmpeg output
 			timeMatch := strings.Index(output, "time=")
 			if timeMatch != -1 {
 				// Encontrar o fim da string de tempo (até o espaço)
-				endPos := strings.Index(output[timeMatch+5:], " ")
-				if endPos > 0 {
-					timeStr := output[timeMatch+5 : timeMatch+5+endPos]
+				endIdx := timeMatch + 5
+				for endIdx < len(output) && output[endIdx] != ' ' {
+					endIdx++
+				}
+				
+				if endIdx > timeMatch+5 {
+					timeStr := output[timeMatch+5:endIdx]
 					timeStr = strings.TrimSpace(timeStr)
+					
 					// Parse time in HH:MM:SS format
-					parts := strings.Split(timeStr, ":")
-					if len(parts) == 3 {
-						hours, _ := strconv.Atoi(parts[0])
-						minutes, _ := strconv.Atoi(parts[1])
-						seconds, _ := strconv.ParseFloat(parts[2], 64)
-						currentTime := float64(hours*3600) + float64(minutes*60) + seconds
-						
-						// Update progress
-						if totalDuration > 0 {
-							percentComplete := int64((currentTime / totalDuration) * 100)
-							if percentComplete > 100 {
-								percentComplete = 100
+					if len(timeStr) >= 8 { // Garantir que tem pelo menos "HH:MM:SS"
+						parts := strings.Split(timeStr, ":")
+						if len(parts) >= 3 {
+							hours, _ := strconv.Atoi(parts[0])
+							minutes, _ := strconv.Atoi(parts[1])
+							
+							// Remover sufixos que possam existir na parte dos segundos
+							secondsStr := parts[2]
+							if dotIndex := strings.Index(secondsStr, "."); dotIndex >= 0 {
+								secondsStr = secondsStr[:dotIndex+3] // Manter até 2 casas decimais
 							}
-							progress.Update(percentComplete)
+							
+							seconds, _ := strconv.ParseFloat(secondsStr, 64)
+							currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+							
+							// Update progress
+							if totalDuration > 0 {
+								percentComplete := int64((currentTime / totalDuration) * 100)
+								if percentComplete > 100 {
+									percentComplete = 100
+								}
+								
+								// Só atualizar se houver mudança significativa ou for o final
+								if percentComplete > lastProgressReported || percentComplete >= 100 {
+									progress.Update(percentComplete)
+									lastProgressReported = percentComplete
+								}
+							}
 						}
 					}
 				}
+			}
+			
+			// Log errors in verbose mode
+			if strings.Contains(strings.ToLower(output), "error") {
+				vc.Logger.Debug("FFmpeg output: %s", output)
 			}
 		}
 	}()
@@ -436,9 +463,6 @@ func (vc *VideoCompressor) splitVideo(inputFile, segmentDir string, segmentDurat
 
 // compressSegment compresses a single video segment
 func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, settings map[string]string, progress progressReporter) error {
-	// Rastrear o último progresso reportado para limitar atualizações
-	var lastProgressReported int
-	
 	// Obter o caminho para o FFmpeg
 	ffmpegInfo, err := util.FindFFmpeg()
 	if err != nil {
@@ -473,7 +497,9 @@ func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, setting
 	// Monitor progress
 	go func() {
 		// Read FFmpeg output and update progress
-		buf := make([]byte, 1024)
+		buf := make([]byte, 2048)
+		var lastProgressReported int64
+		
 		for {
 			n, err := stderr.Read(buf)
 			if n == 0 || err != nil {
@@ -481,38 +507,57 @@ func (vc *VideoCompressor) compressSegment(inputFile, outputFile string, setting
 			}
 			
 			output := string(buf[:n])
+			
 			// Parse time information from FFmpeg output
 			timeMatch := strings.Index(output, "time=")
 			if timeMatch != -1 {
 				// Encontrar o fim da string de tempo (até o espaço)
-				endPos := strings.Index(output[timeMatch+5:], " ")
-				if endPos > 0 {
-					timeStr := output[timeMatch+5 : timeMatch+5+endPos]
+				endIdx := timeMatch + 5
+				for endIdx < len(output) && output[endIdx] != ' ' {
+					endIdx++
+				}
+				
+				if endIdx > timeMatch+5 {
+					timeStr := output[timeMatch+5:endIdx]
 					timeStr = strings.TrimSpace(timeStr)
+					
 					// Parse time in HH:MM:SS format
-					parts := strings.Split(timeStr, ":")
-					if len(parts) == 3 {
-						hours, _ := strconv.Atoi(parts[0])
-						minutes, _ := strconv.Atoi(parts[1])
-						seconds, _ := strconv.ParseFloat(parts[2], 64)
-						currentTime := float64(hours*3600) + float64(minutes*60) + seconds
-						
-						// Update progress for this segment
-						if totalDuration > 0 {
-							percentComplete := int((currentTime / totalDuration) * 100)
-							if percentComplete > 100 {
-								percentComplete = 100
+					if len(timeStr) >= 8 { // Garantir que tem pelo menos "HH:MM:SS"
+						parts := strings.Split(timeStr, ":")
+						if len(parts) >= 3 {
+							hours, _ := strconv.Atoi(parts[0])
+							minutes, _ := strconv.Atoi(parts[1])
+							
+							// Remover sufixos que possam existir na parte dos segundos
+							secondsStr := parts[2]
+							if dotIndex := strings.Index(secondsStr, "."); dotIndex >= 0 {
+								secondsStr = secondsStr[:dotIndex+3] // Manter até 2 casas decimais
 							}
 							
-							// Limitar a frequência das atualizações de progresso
-							// para evitar sobrecarga em arquivos grandes
-							if percentComplete > lastProgressReported+1 || percentComplete >= 100 {
-								progress.reportProgress(percentComplete)
-								lastProgressReported = percentComplete
+							seconds, _ := strconv.ParseFloat(secondsStr, 64)
+							currentTime := float64(hours*3600) + float64(minutes*60) + seconds
+							
+							// Update progress
+							if totalDuration > 0 {
+								percentComplete := int64((currentTime / totalDuration) * 100)
+								if percentComplete > 100 {
+									percentComplete = 100
+								}
+								
+								// Só atualizar se houver mudança significativa ou for o final
+								if percentComplete > lastProgressReported || percentComplete >= 100 {
+									progress.reportProgress(int(percentComplete))
+									lastProgressReported = percentComplete
+								}
 							}
 						}
 					}
 				}
+			}
+			
+			// Log errors in verbose mode
+			if strings.Contains(strings.ToLower(output), "error") {
+				vc.Logger.Debug("FFmpeg output: %s", output)
 			}
 		}
 	}()
