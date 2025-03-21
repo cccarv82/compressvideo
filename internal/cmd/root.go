@@ -246,11 +246,32 @@ func processDirectory(inputDir, outputDir string) error {
 	}
 	
 	if videoCount == 0 && subdirCount == 0 {
-		logger.Warning("No video files found in the directory")
+		logger.Warning("Nenhum arquivo de vídeo encontrado no diretório")
 		return nil
 	}
 	
-	logger.Info("Found %d video files to process", videoCount)
+	// Contar arquivos de vídeo que serão ignorados
+	var ignoredVideoCount int
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		
+		filename := file.Name()
+		if !isVideoFile(filename) {
+			continue
+		}
+		
+		filePath := filepath.Join(inputDir, filename)
+		if hasCompressedSuffix(filename) || hasCompressedVersion(filePath) {
+			ignoredVideoCount++
+		}
+	}
+	
+	logger.Info("Encontrados %d arquivos de vídeo para processar", videoCount)
+	if ignoredVideoCount > 0 {
+		logger.Info("%d arquivos de vídeo serão ignorados (já comprimidos)", ignoredVideoCount)
+	}
 	
 	// Process each video file
 	fileIndex := 1 // Track the index of files being processed
@@ -279,7 +300,7 @@ func processDirectory(inputDir, outputDir string) error {
 		
 		// Skip already compressed files
 		if hasCompressedSuffix(filename) {
-			logger.Debug("Skipping already compressed file: %s", filename)
+			logger.Info("Ignorando arquivo já comprimido: %s", filename)
 			skippedCount++
 			continue
 		}
@@ -289,7 +310,7 @@ func processDirectory(inputDir, outputDir string) error {
 		
 		// Skip files that already have a compressed version
 		if hasCompressedVersion(inputFilePath) {
-			logger.Debug("Skipping file that already has a compressed version: %s", filename)
+			logger.Info("Ignorando arquivo que já possui versão comprimida: %s", filename)
 			skippedCount++
 			continue
 		}
@@ -776,7 +797,28 @@ func processDirectoryCompression(inputDir, outputDir string) error {
 		return nil
 	}
 	
+	// Contar arquivos de vídeo que serão ignorados
+	var ignoredVideoCount int
+	for _, file := range files {
+		if file.IsDir() {
+			continue
+		}
+		
+		filename := file.Name()
+		if !isVideoFile(filename) {
+			continue
+		}
+		
+		filePath := filepath.Join(inputDir, filename)
+		if hasCompressedSuffix(filename) || hasCompressedVersion(filePath) {
+			ignoredVideoCount++
+		}
+	}
+	
 	logger.Info("Encontrados %d arquivos de vídeo para processar", videoCount)
+	if ignoredVideoCount > 0 {
+		logger.Info("%d arquivos de vídeo serão ignorados (já comprimidos)", ignoredVideoCount)
+	}
 	
 	// Process each video file
 	fileIndex := 1 // Track the index of files being processed
@@ -805,7 +847,7 @@ func processDirectoryCompression(inputDir, outputDir string) error {
 		
 		// Skip already compressed files
 		if hasCompressedSuffix(filename) {
-			logger.Debug("Ignorando arquivo já comprimido: %s", filename)
+			logger.Info("Ignorando arquivo já comprimido: %s", filename)
 			skippedCount++
 			continue
 		}
@@ -815,7 +857,7 @@ func processDirectoryCompression(inputDir, outputDir string) error {
 		
 		// Skip files that already have a compressed version
 		if hasCompressedVersion(inputFilePath) {
-			logger.Debug("Ignorando arquivo que já possui versão comprimida: %s", filename)
+			logger.Info("Ignorando arquivo que já possui versão comprimida: %s", filename)
 			skippedCount++
 			continue
 		}

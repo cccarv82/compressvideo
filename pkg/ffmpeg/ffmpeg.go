@@ -404,7 +404,11 @@ func (ffmpeg *FFmpeg) Execute() error {
 	if settings.MaxWidth > 0 || settings.MaxHeight > 0 {
 		ffmpeg.Logger.Info("  Escala: %dx%d", settings.MaxWidth, settings.MaxHeight)
 	}
-	ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(settings.TargetBitrate)/1024/1024)
+	if settings.TargetBitrate > 0 {
+		ffmpeg.Logger.Info("  Bitrate: %.2f Mbps", float64(settings.TargetBitrate)/1024/1024)
+	} else {
+		ffmpeg.Logger.Info("  Bitrate: Automático (controlado pelo CRF)")
+	}
 	
 	// Iniciar compressão
 	ffmpeg.Logger.Info("Iniciando compressão do vídeo...")

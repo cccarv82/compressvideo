@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.3] - Melhorias na Interface de Usuário
+
+### Melhorado
+- Informações mais claras sobre o bitrate durante a compressão
+- Mensagens mais informativas sobre arquivos que serão ignorados
+- Melhor feedback sobre os modos de compressão (CRF vs. Bitrate fixo)
+- Exibição aprimorada do progresso de diretórios com múltiplos arquivos
+
 ## [1.3.2] - Otimização no Processamento de Diretórios
 
 ### Melhorado
