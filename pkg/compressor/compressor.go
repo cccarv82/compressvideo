@@ -182,6 +182,16 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 	}
 	ffmpegPath := ffmpegInfo.Path
 	
+	// Backup das configurações originais para fallback
+	originalHWAccel := ""
+	originalCodec := ""
+	if vc.FFmpeg.Options != nil {
+		originalHWAccel = vc.FFmpeg.Options.HWAccel
+		if codec, ok := settings["codec"]; ok {
+			originalCodec = codec
+		}
+	}
+	
 	// Build FFmpeg command arguments
 	args := vc.BuildFFmpegArgs(inputFile, outputFile, settings)
 	
@@ -198,6 +208,9 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 		return fmt.Errorf("error getting video duration: %w", err)
 	}
 	totalDuration := videoFile.Duration
+	
+	// Variável para capturar a saída completa de stderr para análise de erros
+	var stderrOutput strings.Builder
 	
 	// Pipe stderr to capture progress info
 	stderr, err := cmd.StderrPipe()
@@ -223,6 +236,7 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			}
 			
 			output := string(buf[:n])
+			stderrOutput.WriteString(output) // Capturar a saída completa
 			
 			// Parse time information from FFmpeg output
 			timeMatch := strings.Index(output, "time=")
@@ -279,7 +293,67 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 	}()
 	
 	// Wait for the command to finish
-	if err := cmd.Wait(); err != nil {
+	err = cmd.Wait()
+	
+	// Se ocorrer um erro e estiver usando aceleração de hardware, tentar novamente com CPU
+	if err != nil && originalHWAccel != "none" && originalHWAccel != "" {
+		errorOutput := stderrOutput.String()
+		vc.Logger.Warning("Compressão com aceleração de hardware falhou: %v", err)
+		
+		// Verificar se o erro está relacionado à aceleração de hardware
+		hwaccelRelatedErrors := []string{
+			"cannot open", "failed to initialize", "not supported", "No NVENC",
+			"CUDA error", "Generic error in an external library", "Invalid data found",
+			"Device creation failed", "Error initializing", "0xfffffff", "0xffffff",
+		}
+		
+		needFallback := false
+		for _, errText := range hwaccelRelatedErrors {
+			if strings.Contains(errorOutput, errText) {
+				needFallback = true
+				break
+			}
+		}
+		
+		if needFallback || runtime.GOOS == "windows" {
+			vc.Logger.Info("Tentando novamente sem aceleração de hardware...")
+			
+			// Redefinir as configurações para usar CPU
+			if vc.FFmpeg.Options != nil {
+				vc.FFmpeg.Options.HWAccel = "none"
+			}
+			
+			// Restaurar codec original
+			if originalCodec != "" && strings.Contains(settings["codec"], "_nvenc") {
+				settings["codec"] = "libx264"
+			} else if originalCodec != "" && strings.Contains(settings["codec"], "_qsv") {
+				settings["codec"] = "libx264"
+			} else if originalCodec != "" && strings.Contains(settings["codec"], "_amf") {
+				settings["codec"] = "libx264"
+			}
+			
+			// Reconstruir argumentos e tentar novamente
+			args = vc.BuildFFmpegArgs(inputFile, outputFile, settings)
+			cmdStr = fmt.Sprintf("%s %s", ffmpegPath, strings.Join(args, " "))
+			vc.Logger.Debug("Tentando novamente com CPU: %s", cmdStr)
+			
+			// Criar novo comando
+			cmd = exec.Command(ffmpegPath, args...)
+			
+			// Executar comando diretamente (sem analisar o progresso)
+			output, err := cmd.CombinedOutput()
+			if err != nil {
+				vc.Logger.Error("Falha também ao tentar com CPU: %v", err)
+				return fmt.Errorf("FFmpeg error (CPU fallback): %w\nDetalhes: %s", err, string(output))
+			}
+			
+			vc.Logger.Info("Compressão com CPU concluída com sucesso após falha na GPU")
+			progress.Update(100)
+			return nil
+		}
+		
+		return fmt.Errorf("FFmpeg error: %w\nDetalhes: %s", err, errorOutput)
+	} else if err != nil {
 		return fmt.Errorf("FFmpeg error: %w", err)
 	}
 	
@@ -607,17 +681,35 @@ func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, setting
 	
 	// Add hardware acceleration if specified
 	hwaccel := vc.FFmpeg.Options.HWAccel
+	isWindows := runtime.GOOS == "windows"
+	
 	if hwaccel != "none" {
+		vc.Logger.Debug("Tentando usar aceleração de hardware: %s", hwaccel)
+		
 		// Add appropriate hardware acceleration flags based on the type
 		switch hwaccel {
 		case "nvidia":
-			vc.Logger.Debug("Usando aceleração de hardware NVIDIA")
+			vc.Logger.Debug("Configurando aceleração de hardware NVIDIA")
 			if settings["codec"] == "libx264" {
 				settings["codec"] = "h264_nvenc"
-				args = append(args, "-hwaccel", "cuda")
+				// No Windows, o parâmetro -hwaccel pode causar problemas com alguns drivers
+				if !isWindows {
+					args = append(args, "-hwaccel", "cuda")
+				}
+				// Adicionar parâmetros específicos para o Windows com NVENC
+				if isWindows {
+					args = append(args, "-hwaccel_output_format", "cuda")
+				}
 			} else if settings["codec"] == "libx265" {
 				settings["codec"] = "hevc_nvenc"
-				args = append(args, "-hwaccel", "cuda")
+				// No Windows, o parâmetro -hwaccel pode causar problemas com alguns drivers
+				if !isWindows {
+					args = append(args, "-hwaccel", "cuda")
+				}
+				// Adicionar parâmetros específicos para o Windows com NVENC
+				if isWindows {
+					args = append(args, "-hwaccel_output_format", "cuda")
+				}
 			}
 		case "intel":
 			vc.Logger.Debug("Usando aceleração de hardware Intel QuickSync")
@@ -682,6 +774,16 @@ func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, setting
 	// Add codec-specific parameters
 	if codec == "libx265" && settings["x265-params"] != "" {
 		args = append(args, "-x265-params", settings["x265-params"])
+	} else if strings.Contains(codec, "nvenc") && isWindows {
+		// Adicionar parâmetros específicos para NVENC no Windows para melhorar a compatibilidade
+		if codec == "h264_nvenc" {
+			args = append(args, "-rc", "vbr")
+			args = append(args, "-rc-lookahead", "20")
+			args = append(args, "-spatial-aq", "1")
+		} else if codec == "hevc_nvenc" {
+			args = append(args, "-rc", "vbr")
+			args = append(args, "-rc-lookahead", "20")
+		}
 	}
 	
 	// Add pixel format if specified

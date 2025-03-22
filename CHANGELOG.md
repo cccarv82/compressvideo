@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.2] - Correções para Aceleração de Hardware no Windows
+
+### Corrigido
+- Problema de compatibilidade com aceleração NVIDIA em sistemas Windows
+- Adicionado fallback automático para CPU quando a aceleração de hardware falha
+- Tratamento especial para erros específicos de aceleração de hardware
+- Melhorias nos parâmetros de codificação NVENC para maior compatibilidade
+
+### Melhorado
+- Detecção e manipulação de erros durante o processo de compressão
+- Feedback mais detalhado ao usuário sobre problemas de aceleração
+- Configurações específicas por plataforma para melhor compatibilidade
+
 ## [1.5.1] - Melhorias na Aceleração de Hardware
 
 ### Adicionado
