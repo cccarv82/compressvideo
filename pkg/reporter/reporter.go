@@ -235,22 +235,6 @@ func (rg *ReportGenerator) DisplayReportToConsole(report *Report) {
 		logger.Info("  Preset: %s", preset)
 	}
 	
-	// Show hardware acceleration if used
-	if rg.FFmpeg.Options != nil && rg.FFmpeg.Options.HWAccel != "none" {
-		logger.Info("\n⚡ HARDWARE ACCELERATION:")
-		switch rg.FFmpeg.Options.HWAccel {
-		case "nvidia":
-			logger.Info("   GPU NVIDIA com codec %s", strings.Replace(report.Result.Settings["codec"], "_nvenc", "", 1))
-		case "intel":
-			logger.Info("   Intel QuickSync com codec %s", strings.Replace(report.Result.Settings["codec"], "_qsv", "", 1))
-		case "amd":
-			logger.Info("   GPU AMD com codec %s", strings.Replace(report.Result.Settings["codec"], "_amf", "", 1))
-		default:
-			logger.Info("   %s", rg.FFmpeg.Options.HWAccel)
-		}
-		logger.Info("   Aceleração de hardware ativa: processamento mais rápido")
-	}
-	
 	// Display tips
 	if len(report.CompressionTips) > 0 {
 		logger.Info("\n💡 OPTIMIZATION TIPS:")

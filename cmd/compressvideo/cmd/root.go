@@ -27,7 +27,6 @@ var (
 	preset  string  // fast, balanced, thorough
 	force   bool    // Overwrite output if exists
 	verbose bool    // Verbose logging
-	hwaccel string  // Hardware acceleration (none, auto, nvidia, intel, amd)
 	
 	// Cache options
 	useCache        bool   // Whether to use analysis cache
@@ -73,7 +72,6 @@ func init() {
 	rootCmd.Flags().StringVarP(&preset, "preset", "p", "balanced", "Compression preset (fast, balanced, thorough)")
 	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file if it exists")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show verbose output")
-	rootCmd.Flags().StringVarP(&hwaccel, "hwaccel", "a", "none", "Hardware acceleration (none, auto, nvidia, intel, amd)")
 	rootCmd.Flags().BoolVarP(&useCache, "use-cache", "c", false, "Whether to use analysis cache")
 	rootCmd.Flags().BoolVarP(&cacheClearExpired, "clear-cache", "C", false, "Whether to clear expired cache entries")
 	rootCmd.Flags().IntVarP(&cacheMaxAge, "cache-max-age", "A", 7, "Maximum age of cache entries in days")
@@ -99,18 +97,6 @@ func validateFlags() error {
 	}
 	if !validPresets[preset] {
 		return fmt.Errorf("preset must be one of: fast, balanced, thorough (got %s)", preset)
-	}
-
-	// Validate hardware acceleration
-	validHWAccel := map[string]bool{
-		"none":   true,
-		"auto":   true,
-		"nvidia": true,
-		"intel":  true,
-		"amd":    true,
-	}
-	if !validHWAccel[hwaccel] {
-		return fmt.Errorf("hardware acceleration must be one of: none, auto, nvidia, intel, amd (got %s)", hwaccel)
 	}
 
 	// Validate output file
@@ -218,7 +204,6 @@ func process(cmd *cobra.Command, args []string) error {
 	logger.Field("Output File", outputFile)
 	logger.Field("Quality Level", "%d/5", quality)
 	logger.Field("Preset", preset)
-	logger.Field("Hardware Acceleration", hwaccel)
 	
 	// Process the file
 	return processSingleFile(inputFile, outputFile, videoCache)
@@ -467,7 +452,6 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 		logger.Debug("  Quality Level: %d", quality)
 		logger.Debug("  Compression Preset: %s", preset)
 		logger.Debug("  Force Overwrite: %v", force)
-		logger.Debug("  Hardware Acceleration: %s", hwaccel)
 	}
 
 	// Check if output file exists and handle overwrite
@@ -479,49 +463,10 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	options := &ffmpeg.Options{
 		Quality: quality,
 		Preset:  preset,
-		HWAccel: hwaccel,
 	}
 
 	// Create FFmpeg instance
 	ffmpegInstance := ffmpeg.NewFFmpeg(inputFile, outputFile, options, logger)
-
-	// Check hardware acceleration
-	if hwaccel != "none" {
-		accelerators, err := ffmpegInstance.DetectAvailableHWAccelerators()
-		if err != nil {
-			logger.Warning("Não foi possível detectar aceleradores de hardware: %v", err)
-			logger.Warning("Usando processamento via CPU (sem aceleração)")
-			options.HWAccel = "none"
-		} else if len(accelerators) == 0 {
-			logger.Warning("Nenhum acelerador de hardware detectado. Usando CPU.")
-			options.HWAccel = "none"
-		} else if hwaccel == "auto" {
-			// Choose the best available accelerator
-			// Priority: nvidia > intel > amd > CPU
-			chosenAccel := "none"
-			if contains(accelerators, "nvidia") {
-				chosenAccel = "nvidia"
-			} else if contains(accelerators, "intel") {
-				chosenAccel = "intel"
-			} else if contains(accelerators, "amd") {
-				chosenAccel = "amd"
-			}
-			
-			if chosenAccel != "none" {
-				logger.Info("Aceleração de hardware ativada: %s (detectado automaticamente)", chosenAccel)
-				options.HWAccel = chosenAccel
-			} else {
-				logger.Warning("Nenhum acelerador de hardware utilizável detectado. Usando CPU.")
-				options.HWAccel = "none"
-			}
-		} else if !contains(accelerators, hwaccel) {
-			logger.Warning("O acelerador de hardware '%s' não está disponível. Usando CPU.", hwaccel)
-			logger.Warning("Aceleradores disponíveis: %v", accelerators)
-			options.HWAccel = "none"
-		} else {
-			logger.Info("Usando aceleração de hardware: %s", hwaccel)
-		}
-	}
 
 	// Create analyzer
 	contentAnalyzer := analyzer.NewContentAnalyzer(ffmpegInstance, logger)

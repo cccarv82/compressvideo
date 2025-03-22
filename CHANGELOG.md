@@ -1,5 +1,29 @@
 # Changelog
 
+## [1.5.6] - Remoção Completa de Aceleração de Hardware
+
+### Removido
+- Remoção completa do código de aceleração de hardware
+- Eliminados todos os tratamentos específicos para NVIDIA, Intel e AMD
+- Removidas estruturas de dados e campos relacionados à aceleração via GPU
+
+### Melhorado
+- Código simplificado para utilizar apenas codecs baseados em CPU
+- Processo de compressão mais estável e previsível
+- Melhor desempenho geral sem tentativas de fallback para GPU
+
+## [1.5.5] - Simplificação e Remoção de Aceleração de Hardware
+
+### Removido
+- Funcionalidade de aceleração de hardware (GPU) removida devido a problemas persistentes de compatibilidade
+- Opção de linha de comando `-a/--hwaccel` removida
+- Eliminado código relacionado à detecção e utilização de aceleradores NVIDIA, Intel e AMD
+
+### Melhorado
+- Interface simplificada sem opções que causavam erros frequentes
+- Melhor foco no processamento estável via CPU
+- Mensagens de erro menos confusas para o usuário final
+
 ## [1.5.4] - Correções de Compatibilidade NVENC e Sintaxe
 
 ### Corrigido
