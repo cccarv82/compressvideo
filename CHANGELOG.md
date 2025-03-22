@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.5.0] - Cache de Análise de Conteúdo
+
+### Adicionado
+- Sistema de cache para armazenar resultados de análise de vídeos
+- Banco de dados SQLite para armazenar os dados de forma eficiente
+- Reutilização de configurações para vídeos semelhantes
+- Comando `cache` para gerenciar o cache de análise
+- Opções de linha de comando para controlar o comportamento do cache:
+  - `--use-cache/-c`: Ativar o uso do cache
+  - `--clear-cache/-C`: Limpar entradas expiradas do cache
+  - `--cache-max-age/-A`: Definir idade máxima das entradas do cache em dias
+
+### Melhorado
+- Tempo de análise reduzido para vídeos previamente processados
+- Processamento de lotes de vídeos mais rápido
+- Detecção de vídeos similares para compartilhar configurações
+- Gerenciamento inteligente do cache com limpeza automática
+- Processamento em diretórios beneficiado pelo reuso de configurações
+
 ## [1.4.0] - Aceleração de Hardware (GPU)
 
 ### Adicionado

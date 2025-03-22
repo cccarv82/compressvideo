@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cccarv82/compressvideo/pkg/analyzer"
+	"github.com/cccarv82/compressvideo/pkg/cache"
 	"github.com/cccarv82/compressvideo/pkg/compressor"
 	"github.com/cccarv82/compressvideo/pkg/ffmpeg"
 	"github.com/cccarv82/compressvideo/pkg/reporter"
@@ -27,6 +28,11 @@ var (
 	force   bool    // Overwrite output if exists
 	verbose bool    // Verbose logging
 	hwaccel string  // Hardware acceleration (none, auto, nvidia, intel, amd)
+	
+	// Cache options
+	useCache        bool   // Whether to use analysis cache
+	cacheClearExpired bool // Whether to clear expired cache entries
+	cacheMaxAge     int    // Maximum age of cache entries in days
 
 	// Logger
 	logger *util.Logger
@@ -68,6 +74,9 @@ func init() {
 	rootCmd.Flags().BoolVarP(&force, "force", "f", false, "Force overwrite output file if it exists")
 	rootCmd.Flags().BoolVarP(&verbose, "verbose", "v", false, "Show verbose output")
 	rootCmd.Flags().StringVarP(&hwaccel, "hwaccel", "a", "none", "Hardware acceleration (none, auto, nvidia, intel, amd)")
+	rootCmd.Flags().BoolVarP(&useCache, "use-cache", "c", false, "Whether to use analysis cache")
+	rootCmd.Flags().BoolVarP(&cacheClearExpired, "clear-cache", "C", false, "Whether to clear expired cache entries")
+	rootCmd.Flags().IntVarP(&cacheMaxAge, "cache-max-age", "A", 7, "Maximum age of cache entries in days")
 }
 
 // validateFlags validates the input flags
@@ -140,164 +149,79 @@ func process(cmd *cobra.Command, args []string) error {
 		base = strings.TrimSuffix(base, ext)
 		outputFile = filepath.Join(dir, base+"-compressed"+ext)
 	}
-	
-	logger.Section("Processing Video")
-	logger.Field("Input File", "%s", inputFile)
-	logger.Field("Output File", "%s", outputFile)
-	logger.Field("Quality Level", "%d/5", quality)
-	logger.Field("Preset", "%s", preset)
-	logger.Field("Hardware Acceleration", "%s", hwaccel)
-	
-	if verbose {
-		logger.Debug("File Info:")
-		logger.Debug("  Input Path: %s", inputFile)
-		logger.Debug("  Output Path: %s", outputFile)
-		logger.Debug("  Quality Level: %d", quality)
-		logger.Debug("  Compression Preset: %s", preset)
-		logger.Debug("  Force Overwrite: %v", force)
-		logger.Debug("  Hardware Acceleration: %s", hwaccel)
+
+	// Check if input file is a directory
+	fileInfo, err := os.Stat(inputFile)
+	if err != nil {
+		return fmt.Errorf("error accessing input file: %w", err)
 	}
-	
-	// Check if input file exists
-	if _, err := os.Stat(inputFile); os.IsNotExist(err) {
-		return fmt.Errorf("input file does not exist: %s", inputFile)
-	}
-	
-	// Check if output file exists and handle overwrite
-	if _, err := os.Stat(outputFile); err == nil && !force {
-		return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
-	}
-	
-	// Configure FFmpeg options
-	options := &ffmpeg.Options{
-		Quality: quality,
-		Preset:  preset,
-		HWAccel: hwaccel,
-	}
-	
-	// Create FFmpeg instance
-	ffmpegInstance := ffmpeg.NewFFmpeg(inputFile, outputFile, options, logger)
-	
-	// If using hardware acceleration, check if it's available
-	if hwaccel != "none" && hwaccel != "auto" {
-		accelerators, err := ffmpegInstance.DetectAvailableHWAccelerators()
+
+	// Initialize cache if enabled
+	var videoCache *cache.VideoAnalysisCache
+	if useCache {
+		videoCache, err = cache.NewVideoAnalysisCache(logger)
 		if err != nil {
-			logger.Warning("Não foi possível detectar aceleradores de hardware: %v", err)
-		} else if !contains(accelerators, hwaccel) {
-			logger.Warning("O acelerador de hardware '%s' não está disponível. Usando CPU.", hwaccel)
-			logger.Warning("Aceleradores disponíveis: %v", accelerators)
-			options.HWAccel = "none"
+			logger.Warning("Failed to initialize cache: %v", err)
+			logger.Warning("Continuing without cache...")
+			useCache = false
+		} else {
+			// Set cache options
+			videoCache.SetMaxAge(cacheMaxAge * 24) // Convert days to hours
+			
+			// Clean expired cache entries if requested
+			if cacheClearExpired {
+				cleaned, err := videoCache.CleanExpiredEntries()
+				if err != nil {
+					logger.Warning("Failed to clean expired cache entries: %v", err)
+				} else if cleaned > 0 {
+					logger.Info("Cleaned %d expired cache entries", cleaned)
+				}
+			}
+			
+			// Show cache statistics
+			total, valid, err := videoCache.GetCacheStats()
+			if err != nil {
+				logger.Warning("Failed to get cache statistics: %v", err)
+			} else {
+				logger.Info("Cache status: %d total entries, %d valid entries", total, valid)
+			}
 		}
+		
+		// Clean up cache when done
+		defer func() {
+			if videoCache != nil {
+				videoCache.Close()
+			}
+		}()
+	}
+
+	// Process directory or single file
+	if fileInfo.IsDir() {
+		// Directory provided
+		logger.Section("Processing Directory")
+		logger.Field("Input Directory", inputFile)
+		
+		// If no output directory provided, create one with _compressed suffix
+		if outputFile == "" {
+			outputFile = inputFile + "_compressed"
+		}
+		
+		logger.Field("Output Directory", outputFile)
+		
+		// Process the directory
+		return processDirectory(inputFile, outputFile, videoCache)
 	}
 	
-	// Get video info
-	videoFile, err := ffmpegInstance.GetVideoInfo(inputFile)
-	if err != nil {
-		return fmt.Errorf("falha ao obter informações do vídeo: %v", err)
-	}
+	// Single file processing
+	logger.Section("Processing Video")
+	logger.Field("Input File", inputFile)
+	logger.Field("Output File", outputFile)
+	logger.Field("Quality Level", "%d/5", quality)
+	logger.Field("Preset", preset)
+	logger.Field("Hardware Acceleration", hwaccel)
 	
-	// Display video info
-	displayVideoInfo(videoFile)
-	
-	// Create analyzer
-	analyzer := analyzer.NewContentAnalyzer(ffmpegInstance, logger)
-	
-	// Analyze video
-	analysis, err := analyzer.AnalyzeVideo(videoFile)
-	if err != nil {
-		return fmt.Errorf("falha ao analisar vídeo: %v", err)
-	}
-	
-	// Display analysis results
-	displayAnalysisResults(analysis)
-	
-	// Get compression settings based on analysis
-	compressionSettings, err := analyzer.GetCompressionSettings(analysis, quality)
-	if err != nil {
-		logger.Error("Failed to determine compression settings: %v", err)
-		return err
-	}
-	
-	// Display recommended settings
-	logger.Info("Recommended compression settings:")
-	for key, value := range compressionSettings {
-		logger.Info("  %s: %s", key, value)
-	}
-	
-	// Create a new video compressor
-	videoCompressor := compressor.NewVideoCompressor(ffmpegInstance, analyzer, logger)
-	
-	// Initialize the report generator
-	reportGenerator := reporter.NewReportGenerator(logger, ffmpegInstance)
-	
-	// Create initial report with basic information
-	report := reportGenerator.CreateReport(inputFile, outputFile, videoFile, analysis)
-	
-	// Create a more advanced progress tracker
-	progressOptions := util.ProgressTrackerOptions{
-		Total:          100,
-		Description:    "Compressing Video",
-		Logger:         logger,
-		ShowPercentage: true,
-		ShowSpeed:      true,
-	}
-	
-	progressBar := util.NewProgressTrackerWithOptions(progressOptions)
-	
-	// Set up status callback for real-time updates
-	progressBar.SetStatusCallback(func(progress int64, timeRemaining time.Duration, rate float64) {
-		logger.Debug("Compression Status: %d%% complete, %.1f seconds remaining", 
-			progress, timeRemaining.Seconds())
-	})
-	
-	// Start compression
-	logger.Section("Compression Process")
-	logger.Info("Starting compression process...")
-	startTime := time.Now()
-	
-	result, err := videoCompressor.CompressVideo(
-		inputFile,
-		outputFile, 
-		analysis,
-		compressionSettings,
-		quality,
-		preset,
-		progressBar,
-	)
-	
-	if err != nil {
-		logger.Error("Compression failed: %v", err)
-		return err
-	}
-	
-	// Ensure progress bar is completed
-	progressBar.Finish()
-	
-	// Complete the report with results
-	report = reportGenerator.FinalizeReport(report, result)
-	
-	// Display comprehensive report to console
-	reportGenerator.DisplayReportToConsole(report)
-	
-	// Save report to file
-	reportPath, err := reportGenerator.SaveReportToFile(report)
-	if err != nil {
-		logger.Warning("Failed to save report to file: %v", err)
-	} else {
-		logger.Info("Compression report saved to: %s", reportPath)
-	}
-	
-	// Display a user-friendly completion message
-	processingTime := time.Since(startTime).Round(time.Second)
-	savings := fmt.Sprintf("%.1f%%", result.SavedSpacePercent)
-	
-	logger.Success("Video compression completed successfully!")
-	logger.Info("Compressed %s in %s, saving %s of space", 
-		filepath.Base(inputFile), 
-		processingTime, 
-		savings)
-	
-	return nil
+	// Process the file
+	return processSingleFile(inputFile, outputFile, videoCache)
 }
 
 // Função auxiliar para verificar se um slice contém um determinado valor
@@ -473,4 +397,254 @@ func getFileExtension(filename string) string {
 		}
 	}
 	return ""
+}
+
+// processDirectory processes a directory of video files
+func processDirectory(inputDir, outputDir string, videoCache *cache.VideoAnalysisCache) error {
+	// Create output directory if it doesn't exist
+	if err := os.MkdirAll(outputDir, 0755); err != nil {
+		return fmt.Errorf("failed to create output directory: %w", err)
+	}
+
+	// List files in the input directory
+	files, err := os.ReadDir(inputDir)
+	if err != nil {
+		return fmt.Errorf("failed to read input directory: %w", err)
+	}
+
+	// Count of video files found
+	videoCount := 0
+
+	// Process each file
+	for _, file := range files {
+		if file.IsDir() {
+			continue // Skip subdirectories for now
+		}
+
+		// Check if it's a video file
+		fileName := file.Name()
+		inputPath := filepath.Join(inputDir, fileName)
+		if !isVideoFile(fileName) {
+			continue
+		}
+
+		videoCount++
+
+		// Define output path
+		outputFileName := strings.TrimSuffix(fileName, filepath.Ext(fileName)) + "-compressed" + filepath.Ext(fileName)
+		outputPath := filepath.Join(outputDir, outputFileName)
+
+		// Check if output file exists and handle overwrite
+		if _, err := os.Stat(outputPath); err == nil && !force {
+			logger.Warning("Skipping %s: output file already exists (use -f to force overwrite)", fileName)
+			continue
+		}
+
+		// Process the video file
+		logger.Info("Processing video %s...", fileName)
+		err = processSingleFile(inputPath, outputPath, videoCache)
+		if err != nil {
+			logger.Error("Failed to process %s: %v", fileName, err)
+			continue
+		}
+	}
+
+	if videoCount == 0 {
+		logger.Warning("No video files found in directory")
+	} else {
+		logger.Success("Processed %d video files", videoCount)
+	}
+
+	return nil
+}
+
+// processSingleFile processes a single video file
+func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnalysisCache) error {
+	if verbose {
+		logger.Debug("File Info:")
+		logger.Debug("  Input Path: %s", inputFile)
+		logger.Debug("  Output Path: %s", outputFile)
+		logger.Debug("  Quality Level: %d", quality)
+		logger.Debug("  Compression Preset: %s", preset)
+		logger.Debug("  Force Overwrite: %v", force)
+		logger.Debug("  Hardware Acceleration: %s", hwaccel)
+	}
+
+	// Check if output file exists and handle overwrite
+	if _, err := os.Stat(outputFile); err == nil && !force {
+		return fmt.Errorf("output file already exists (use -f to force overwrite): %s", outputFile)
+	}
+
+	// Configure FFmpeg options
+	options := &ffmpeg.Options{
+		Quality: quality,
+		Preset:  preset,
+		HWAccel: hwaccel,
+	}
+
+	// Create FFmpeg instance
+	ffmpegInstance := ffmpeg.NewFFmpeg(inputFile, outputFile, options, logger)
+
+	// If using hardware acceleration, check if it's available
+	if hwaccel != "none" && hwaccel != "auto" {
+		accelerators, err := ffmpegInstance.DetectAvailableHWAccelerators()
+		if err != nil {
+			logger.Warning("Não foi possível detectar aceleradores de hardware: %v", err)
+		} else if !contains(accelerators, hwaccel) {
+			logger.Warning("O acelerador de hardware '%s' não está disponível. Usando CPU.", hwaccel)
+			logger.Warning("Aceleradores disponíveis: %v", accelerators)
+			options.HWAccel = "none"
+		}
+	}
+
+	// Create analyzer
+	analyzer := analyzer.NewContentAnalyzer(ffmpegInstance, logger)
+
+	// Variables to hold video info and analysis
+	var videoFile *ffmpeg.VideoFile
+	var analysis *analyzer.VideoAnalysis
+	var err error
+	var cacheUsed bool
+
+	// Try to get from cache if enabled
+	if videoCache != nil && useCache {
+		logger.Info("Checking analysis cache...")
+		analysis, videoFile, cacheUsed, err = videoCache.Get(inputFile)
+		if err != nil {
+			logger.Warning("Error reading from cache: %v", err)
+		}
+		
+		if cacheUsed {
+			logger.Info("Using cached analysis for %s", filepath.Base(inputFile))
+		} else {
+			logger.Info("No valid cache entry found, analyzing video...")
+		}
+	}
+
+	// If not using cache or cache miss, perform analysis
+	if !cacheUsed {
+		// Get video info
+		videoFile, err = ffmpegInstance.GetVideoInfo(inputFile)
+		if err != nil {
+			return fmt.Errorf("falha ao obter informações do vídeo: %v", err)
+		}
+
+		// Display video info
+		displayVideoInfo(videoFile)
+
+		// Analyze video
+		analysis, err = analyzer.AnalyzeVideo(videoFile)
+		if err != nil {
+			return fmt.Errorf("falha ao analisar vídeo: %v", err)
+		}
+
+		// Store in cache for future use if cache is enabled
+		if videoCache != nil && useCache {
+			err = videoCache.Put(inputFile, analysis, videoFile)
+			if err != nil {
+				logger.Warning("Failed to cache analysis: %v", err)
+			} else {
+				logger.Debug("Stored analysis in cache for %s", filepath.Base(inputFile))
+			}
+		}
+	} else {
+		// Still display info even when using cached data
+		displayVideoInfo(videoFile)
+	}
+
+	// Display analysis results
+	displayAnalysisResults(analysis)
+
+	// Get compression settings based on analysis
+	compressionSettings, err := analyzer.GetCompressionSettings(analysis, quality)
+	if err != nil {
+		logger.Error("Failed to determine compression settings: %v", err)
+		return err
+	}
+
+	// Display recommended settings
+	logger.Info("Recommended compression settings:")
+	for key, value := range compressionSettings {
+		logger.Info("  %s: %s", key, value)
+	}
+
+	// Create a new video compressor
+	videoCompressor := compressor.NewVideoCompressor(ffmpegInstance, analyzer, logger)
+
+	// Initialize the report generator
+	reportGenerator := reporter.NewReportGenerator(logger, ffmpegInstance)
+
+	// Create initial report with basic information
+	report := reportGenerator.CreateReport(inputFile, outputFile, videoFile, analysis)
+
+	// Create a more advanced progress tracker
+	progressOptions := util.ProgressTrackerOptions{
+		Total:          100,
+		Description:    "Compressing Video",
+		Logger:         logger,
+		ShowPercentage: true,
+		ShowSpeed:      true,
+	}
+
+	progressBar := util.NewProgressTrackerWithOptions(progressOptions)
+
+	// Set up status callback for real-time updates
+	progressBar.SetStatusCallback(func(progress int64, timeRemaining time.Duration, rate float64) {
+		logger.Debug("Compression Status: %d%% complete, %.1f seconds remaining", 
+			progress, timeRemaining.Seconds())
+	})
+
+	// Start compression
+	logger.Section("Compression Process")
+	logger.Info("Starting compression process...")
+	startTime := time.Now()
+
+	result, err := videoCompressor.CompressVideo(
+		inputFile,
+		outputFile, 
+		analysis,
+		compressionSettings,
+		quality,
+		preset,
+		progressBar,
+	)
+
+	if err != nil {
+		logger.Error("Compression failed: %v", err)
+		return err
+	}
+
+	// Ensure progress bar is completed
+	progressBar.Finish()
+
+	// Complete the report with results
+	report = reportGenerator.FinalizeReport(report, result)
+
+	// Display comprehensive report to console
+	reportGenerator.DisplayReportToConsole(report)
+
+	// Save report to file
+	reportPath, err := reportGenerator.SaveReportToFile(report)
+	if err != nil {
+		logger.Warning("Failed to save report to file: %v", err)
+	} else {
+		logger.Info("Compression report saved to: %s", reportPath)
+	}
+
+	// Display a user-friendly completion message
+	processingTime := time.Since(startTime).Round(time.Second)
+	savings := fmt.Sprintf("%.1f%%", result.SavedSpacePercent)
+
+	logger.Success("Video compression completed successfully!")
+	logger.Info("Compressed %s in %s, saving %s of space", 
+		filepath.Base(inputFile), 
+		processingTime, 
+		savings)
+
+	// Note about cache usage for user awareness
+	if cacheUsed {
+		logger.Info("Analysis time saved by using cache!")
+	}
+
+	return nil
 } 

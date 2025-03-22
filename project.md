@@ -147,3 +147,40 @@ Capacidade de instalação via go install
 Binários autocontidos (incluir dependências necessárias)
 
 Esta aplicação deve fazer o mínimo de perguntas ao usuário, utilizando inteligência para determinar os melhores parâmetros com base no tipo de vídeo e contexto, mantendo a interface simples e o processo o mais automatizado possível.
+
+
+Sprint 6
+
+Utilização de GPU: Adicionar suporte para codificação por hardware com NVENC (NVIDIA), QuickSync (Intel) ou AMF (AMD), que pode aumentar a velocidade de compressão em até 10x.
+
+Sprint 7
+
+Cache de Análise de Conteúdo: Armazenar resultados de análise em um banco de dados leve para reutilizar configurações para vídeos semelhantes.
+
+Sprint 8
+
+Suporte a Legendas: Detectar, extrair e reinserir legendas durante o processo de compressão.
+
+Sprint 9
+
+Reconhecimento de Conteúdo por IA: Usar modelos de IA para classificar cenas e ajustar parâmetros de compressão por segmento.
+
+Sprint 10
+
+Histórico de Compressão: Relativamente simples de implementar e agregaria muito valor ao usuário.
+
+Sprint 11
+
+Pacotes para Sistemas Operacionais: Criar pacotes nativos (.deb, .rpm, .pkg, etc.) para diferentes distribuições.
+
+Sprint 12
+
+Container Docker: Oferecer uma imagem Docker oficial com todas as dependências pré-instaladas.
+
+Sprint 13
+
+Atualizações Automáticas: Implementar um sistema simples de verificação e instalação de atualizações.
+
+Sprint 14
+
+Modo de Alto Contraste: Para usuários com deficiência visual.

@@ -3,6 +3,7 @@ module github.com/cccarv82/compressvideo
 go 1.22.4
 
 require (
+	github.com/mattn/go-sqlite3 v1.14.24
 	github.com/schollz/progressbar/v3 v3.13.1
 	github.com/spf13/cobra v1.7.0
 	github.com/stretchr/testify v1.3.0
