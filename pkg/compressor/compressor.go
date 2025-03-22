@@ -305,6 +305,8 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			"cannot open", "failed to initialize", "not supported", "No NVENC",
 			"CUDA error", "Generic error in an external library", "Invalid data found",
 			"Device creation failed", "Error initializing", "0xfffffff", "0xffffff",
+			"0xffffffea", // Erro comum em placas NVIDIA no Windows
+			"NVENC error"
 		}
 		
 		needFallback := false
@@ -312,6 +314,19 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			if strings.Contains(errorOutput, errText) {
 				needFallback = true
 				break
+			}
+		}
+		
+		// Analisar os códigos de erro específicos do Windows
+		if runtime.GOOS == "windows" {
+			// No Windows, vários códigos de erro podem indicar problemas com o NVENC
+			windowsNvencErrorCodes := []string{"0xffffffea", "0xc00d36d5", "0xc00d36c9"}
+			for _, errCode := range windowsNvencErrorCodes {
+				if strings.Contains(err.Error(), errCode) {
+					vc.Logger.Warning("Detectado erro específico do NVENC no Windows: %s", errCode)
+					needFallback = true
+					break
+				}
 			}
 		}
 		
@@ -692,23 +707,25 @@ func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, setting
 			vc.Logger.Debug("Configurando aceleração de hardware NVIDIA")
 			if settings["codec"] == "libx264" {
 				settings["codec"] = "h264_nvenc"
-				// No Windows, o parâmetro -hwaccel pode causar problemas com alguns drivers
-				if !isWindows {
-					args = append(args, "-hwaccel", "cuda")
-				}
-				// Adicionar parâmetros específicos para o Windows com NVENC
+				// No Windows, precisamos de configuração diferente
 				if isWindows {
-					args = append(args, "-hwaccel_output_format", "cuda")
+					// No Windows, não usar -hwaccel cuda diretamente
+					// Apenas usar o codec nvenc é suficiente
+					vc.Logger.Debug("Configurando NVENC para Windows")
+				} else {
+					// Em Linux/Mac, adicionar o parâmetro hwaccel
+					args = append(args, "-hwaccel", "cuda")
 				}
 			} else if settings["codec"] == "libx265" {
 				settings["codec"] = "hevc_nvenc"
-				// No Windows, o parâmetro -hwaccel pode causar problemas com alguns drivers
-				if !isWindows {
-					args = append(args, "-hwaccel", "cuda")
-				}
-				// Adicionar parâmetros específicos para o Windows com NVENC
+				// No Windows, precisamos de configuração diferente
 				if isWindows {
-					args = append(args, "-hwaccel_output_format", "cuda")
+					// No Windows, não usar -hwaccel cuda diretamente
+					// Apenas usar o codec nvenc é suficiente
+					vc.Logger.Debug("Configurando NVENC para Windows")
+				} else {
+					// Em Linux/Mac, adicionar o parâmetro hwaccel
+					args = append(args, "-hwaccel", "cuda")
 				}
 			}
 		case "intel":
@@ -774,15 +791,40 @@ func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, setting
 	// Add codec-specific parameters
 	if codec == "libx265" && settings["x265-params"] != "" {
 		args = append(args, "-x265-params", settings["x265-params"])
-	} else if strings.Contains(codec, "nvenc") && isWindows {
-		// Adicionar parâmetros específicos para NVENC no Windows para melhorar a compatibilidade
-		if codec == "h264_nvenc" {
+	} else if strings.Contains(codec, "nvenc") {
+		// Adicionar parâmetros específicos para NVENC para melhorar a compatibilidade
+		if codec == "h264_nvenc" || codec == "hevc_nvenc" {
 			args = append(args, "-rc", "vbr")
-			args = append(args, "-rc-lookahead", "20")
-			args = append(args, "-spatial-aq", "1")
-		} else if codec == "hevc_nvenc" {
-			args = append(args, "-rc", "vbr")
-			args = append(args, "-rc-lookahead", "20")
+			
+			// Garantir que temos um valor de bitrate para usar
+			if bitrate, ok := settings["bitrate"]; ok && bitrate != "" {
+				args = append(args, "-b:v", bitrate)
+			} else {
+				// Definir um bitrate padrão baseado na resolução
+				defaultBitrate := "4M" // Valor padrão para maioria dos vídeos
+				if video, _ := vc.FFmpeg.GetVideoInfo(inputFile); video != nil {
+					if video.Height <= 720 {
+						defaultBitrate = "2M" // 2 Mbps para 720p
+					} else if video.Height <= 1080 {
+						defaultBitrate = "4M" // 4 Mbps para 1080p
+					} else {
+						defaultBitrate = "8M" // 8 Mbps para 4K
+					}
+				}
+				args = append(args, "-b:v", defaultBitrate)
+				vc.Logger.Debug("Usando bitrate padrão para NVENC: %s", defaultBitrate)
+			}
+			
+			// Usar diferentes parâmetros dependendo da plataforma
+			if isWindows {
+				// Parâmetros mais simples para Windows para evitar bugs
+				vc.Logger.Debug("Usando configuração NVENC simplificada para Windows")
+			} else {
+				// Configuração completa para outras plataformas
+				args = append(args, "-rc-lookahead", "20")
+				args = append(args, "-spatial-aq", "1")
+				args = append(args, "-temporal-aq", "1")
+			}
 		}
 	}
 	

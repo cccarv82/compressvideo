@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.3] - Correções específicas para NVIDIA no Windows
+
+### Corrigido
+- Erro 0xffffffea em sistemas Windows ao usar aceleração NVIDIA
+- Problema de inicialização do encoder NVENC corrigido com parâmetros simplificados
+- Implementação de fallback automático para codificação via CPU quando códigos de erro específicos são detectados
+- Tratamento de erros específicos do Windows relacionados à aceleração de hardware
+
+### Melhorado
+- Parâmetros de codificação NVENC optimizados para Windows
+- Configuração simplificada para evitar conflitos de parâmetros no Windows
+- Sistema de atribuição automática de bitrate quando não especificado para encoders de hardware
+- Melhor detecção e tratamento de erros específicos da plataforma Windows com GPUs NVIDIA
+
 ## [1.5.2] - Correções para Aceleração de Hardware no Windows
 
 ### Corrigido
