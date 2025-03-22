@@ -498,7 +498,7 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	}
 
 	// Create analyzer
-	analyzer := analyzer.NewContentAnalyzer(ffmpegInstance, logger)
+	contentAnalyzer := analyzer.NewContentAnalyzer(ffmpegInstance, logger)
 
 	// Variables to hold video info and analysis
 	var videoFile *ffmpeg.VideoFile
@@ -533,7 +533,7 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 		displayVideoInfo(videoFile)
 
 		// Analyze video
-		analysis, err = analyzer.AnalyzeVideo(videoFile)
+		analysis, err = contentAnalyzer.AnalyzeVideo(videoFile)
 		if err != nil {
 			return fmt.Errorf("falha ao analisar vídeo: %v", err)
 		}
@@ -556,7 +556,7 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	displayAnalysisResults(analysis)
 
 	// Get compression settings based on analysis
-	compressionSettings, err := analyzer.GetCompressionSettings(analysis, quality)
+	compressionSettings, err := contentAnalyzer.GetCompressionSettings(analysis, quality)
 	if err != nil {
 		logger.Error("Failed to determine compression settings: %v", err)
 		return err
@@ -569,7 +569,7 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	}
 
 	// Create a new video compressor
-	videoCompressor := compressor.NewVideoCompressor(ffmpegInstance, analyzer, logger)
+	videoCompressor := compressor.NewVideoCompressor(ffmpegInstance, contentAnalyzer, logger)
 
 	// Initialize the report generator
 	reportGenerator := reporter.NewReportGenerator(logger, ffmpegInstance)
@@ -647,4 +647,11 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	}
 
 	return nil
+}
+
+// isVideoFile checks if a file is a video based on its extension
+func isVideoFile(filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	videoExts := []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".3gp"}
+	return contains(videoExts, ext)
 } 

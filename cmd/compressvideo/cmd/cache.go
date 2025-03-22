@@ -1,9 +1,6 @@
 package cmd
 
 import (
-	"fmt"
-	"time"
-
 	"github.com/cccarv82/compressvideo/pkg/cache"
 	"github.com/cccarv82/compressvideo/pkg/util"
 	"github.com/spf13/cobra"
