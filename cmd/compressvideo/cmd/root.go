@@ -485,15 +485,41 @@ func processSingleFile(inputFile, outputFile string, videoCache *cache.VideoAnal
 	// Create FFmpeg instance
 	ffmpegInstance := ffmpeg.NewFFmpeg(inputFile, outputFile, options, logger)
 
-	// If using hardware acceleration, check if it's available
-	if hwaccel != "none" && hwaccel != "auto" {
+	// Check hardware acceleration
+	if hwaccel != "none" {
 		accelerators, err := ffmpegInstance.DetectAvailableHWAccelerators()
 		if err != nil {
 			logger.Warning("Não foi possível detectar aceleradores de hardware: %v", err)
+			logger.Warning("Usando processamento via CPU (sem aceleração)")
+			options.HWAccel = "none"
+		} else if len(accelerators) == 0 {
+			logger.Warning("Nenhum acelerador de hardware detectado. Usando CPU.")
+			options.HWAccel = "none"
+		} else if hwaccel == "auto" {
+			// Choose the best available accelerator
+			// Priority: nvidia > intel > amd > CPU
+			chosenAccel := "none"
+			if contains(accelerators, "nvidia") {
+				chosenAccel = "nvidia"
+			} else if contains(accelerators, "intel") {
+				chosenAccel = "intel"
+			} else if contains(accelerators, "amd") {
+				chosenAccel = "amd"
+			}
+			
+			if chosenAccel != "none" {
+				logger.Info("Aceleração de hardware ativada: %s (detectado automaticamente)", chosenAccel)
+				options.HWAccel = chosenAccel
+			} else {
+				logger.Warning("Nenhum acelerador de hardware utilizável detectado. Usando CPU.")
+				options.HWAccel = "none"
+			}
 		} else if !contains(accelerators, hwaccel) {
 			logger.Warning("O acelerador de hardware '%s' não está disponível. Usando CPU.", hwaccel)
 			logger.Warning("Aceleradores disponíveis: %v", accelerators)
 			options.HWAccel = "none"
+		} else {
+			logger.Info("Usando aceleração de hardware: %s", hwaccel)
 		}
 	}
 

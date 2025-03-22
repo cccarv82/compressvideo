@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.5.1] - Melhorias na Aceleração de Hardware
+
+### Adicionado
+- Mensagens informativas detalhadas sobre qual acelerador de hardware está sendo usado
+- Detecção e seleção automática aprimorada do melhor acelerador disponível
+- Indicação visual de aceleração de hardware ativa nos relatórios de compressão
+- Feedback em tempo real sobre o processo de aceleração
+
+### Melhorado
+- Interface de usuário para mostrar claramente quando a aceleração de hardware está ativa
+- Conversão automática de codecs para versões aceleradas por hardware
+- Detecção mais robusta de GPUs NVIDIA, Intel e AMD
+- Mensagens de diagnóstico quando aceleradores específicos não estão disponíveis
+
 ## [1.5.0] - Cache de Análise de Conteúdo
 
 ### Adicionado

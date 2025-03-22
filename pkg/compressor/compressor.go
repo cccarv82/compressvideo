@@ -603,7 +603,45 @@ func (vc *VideoCompressor) mergeSegments(listFile, outputFile, codec string) err
 // BuildFFmpegArgs constrói os argumentos para o comando FFmpeg
 func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, settings map[string]string) []string {
 	// Base arguments
-	args := []string{"-y", "-i", inputFile}
+	args := []string{"-y"}
+	
+	// Add hardware acceleration if specified
+	hwaccel := vc.FFmpeg.Options.HWAccel
+	if hwaccel != "none" {
+		// Add appropriate hardware acceleration flags based on the type
+		switch hwaccel {
+		case "nvidia":
+			vc.Logger.Debug("Usando aceleração de hardware NVIDIA")
+			if settings["codec"] == "libx264" {
+				settings["codec"] = "h264_nvenc"
+				args = append(args, "-hwaccel", "cuda")
+			} else if settings["codec"] == "libx265" {
+				settings["codec"] = "hevc_nvenc"
+				args = append(args, "-hwaccel", "cuda")
+			}
+		case "intel":
+			vc.Logger.Debug("Usando aceleração de hardware Intel QuickSync")
+			if settings["codec"] == "libx264" {
+				settings["codec"] = "h264_qsv"
+				args = append(args, "-hwaccel", "qsv")
+			} else if settings["codec"] == "libx265" {
+				settings["codec"] = "hevc_qsv"
+				args = append(args, "-hwaccel", "qsv")
+			}
+		case "amd":
+			vc.Logger.Debug("Usando aceleração de hardware AMD")
+			if settings["codec"] == "libx264" {
+				settings["codec"] = "h264_amf"
+				args = append(args, "-hwaccel", "amf")
+			} else if settings["codec"] == "libx265" {
+				settings["codec"] = "hevc_amf"
+				args = append(args, "-hwaccel", "amf")
+			}
+		}
+	}
+	
+	// Add input file
+	args = append(args, "-i", inputFile)
 	
 	// Add codec settings
 	codec := settings["codec"]
