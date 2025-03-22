@@ -15,6 +15,9 @@
 - Velocidade de compressão até 10x mais rápida com aceleração de hardware
 - Ajuste automático de bitrate e configurações de qualidade para codecs de hardware
 - Documentação sobre uso de GPUs para compressão de vídeo
+- Corrigido cálculo de proporção para evitar largura zero ao usar resolução 720p
+- Ajustado comportamento do preset "thorough" para evitar conflitos de configurações
+- Melhorada lógica de escala para qualidade alta e máxima
 
 ## [1.3.7] - Correção da Interface de Progresso e Cálculo de Tamanho
 
