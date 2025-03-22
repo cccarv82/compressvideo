@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.4.0] - Aceleração de Hardware (GPU)
+
+### Adicionado
+- Suporte para codificação por hardware usando GPUs
+- Aceleração NVIDIA (NVENC) para placas GeForce/Quadro
+- Aceleração Intel QuickSync (QSV) para processadores Intel com GPU integrada
+- Aceleração AMD (AMF) para placas Radeon
+- Detecção automática de aceleradores disponíveis no sistema
+- Nova opção de linha de comando `-a/--hwaccel` para selecionar acelerador
+- Detecção automática dos melhores parâmetros para cada tipo de GPU
+
+### Melhorado
+- Velocidade de compressão até 10x mais rápida com aceleração de hardware
+- Ajuste automático de bitrate e configurações de qualidade para codecs de hardware
+- Documentação sobre uso de GPUs para compressão de vídeo
+
 ## [1.3.7] - Correção da Interface de Progresso e Cálculo de Tamanho
 
 ### Corrigido

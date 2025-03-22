@@ -38,6 +38,7 @@ type EncodingSettings struct {
 type Options struct {
 	Quality int    // Quality level (1-5, 1=max compression, 5=max quality)
 	Preset  string // Preset (fast, balanced, thorough)
+	HWAccel string // Hardware acceleration (none, auto, nvidia, intel, amd)
 }
 
 // FFmpeg represents an FFmpeg instance
@@ -351,6 +352,50 @@ func (f *FFmpeg) CalculateFrameComplexity(filePath string) (float64, error) {
 	return averageComplexity, nil
 }
 
+// DetectAvailableHWAccelerators verifica quais aceleradores de hardware estão disponíveis no sistema
+func (ffmpeg *FFmpeg) DetectAvailableHWAccelerators() ([]string, error) {
+	ffmpegInfo, err := util.FindFFmpeg()
+	if err != nil {
+		return nil, fmt.Errorf("falha ao encontrar FFmpeg: %v", err)
+	}
+
+	ffmpegPath := ffmpegInfo.Path
+
+	// Executar FFmpeg para listar codificadores disponíveis
+	cmd := exec.Command(ffmpegPath, "-encoders")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("falha ao listar codificadores: %v", err)
+	}
+
+	availableAccelerators := []string{"none"} // sempre incluir "none" como opção
+
+	// Verificar se os codificadores específicos de hardware estão disponíveis
+	outputStr := string(output)
+
+	// NVIDIA (NVENC)
+	if strings.Contains(outputStr, "h264_nvenc") {
+		availableAccelerators = append(availableAccelerators, "nvidia")
+	}
+
+	// Intel QuickSync
+	if strings.Contains(outputStr, "h264_qsv") {
+		availableAccelerators = append(availableAccelerators, "intel")
+	}
+
+	// AMD (AMF)
+	if strings.Contains(outputStr, "h264_amf") {
+		availableAccelerators = append(availableAccelerators, "amd")
+	}
+
+	// Se encontrou qualquer acelerador, adicionar "auto" como opção
+	if len(availableAccelerators) > 1 {
+		availableAccelerators = append(availableAccelerators, "auto")
+	}
+
+	return availableAccelerators, nil
+}
+
 // Execute executes the FFmpeg command
 func (ffmpeg *FFmpeg) Execute() error {
 	// Verificar se o FFmpeg está instalado
@@ -525,8 +570,9 @@ func (ffmpeg *FFmpeg) Execute() error {
 // DefaultOptions returns default options
 func DefaultOptions() *Options {
 	return &Options{
-		Quality: 3,        // Balanced quality by default
+		Quality: 3,          // Balanced quality by default
 		Preset:  "balanced", // Balanced preset by default
+		HWAccel: "none",     // No hardware acceleration by default
 	}
 }
 
@@ -574,6 +620,80 @@ func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *
 	
 	// Codec padrão é sempre H.264 por compatibilidade
 	settings.VideoCodec = "libx264"
+	
+	// Aplicar aceleração de hardware, se solicitada
+	if ffmpeg.Options.HWAccel != "none" {
+		hwAccel := ffmpeg.Options.HWAccel
+		
+		// Se for "auto", tentar detectar o melhor acelerador disponível
+		if hwAccel == "auto" {
+			availableAccelerators, err := ffmpeg.DetectAvailableHWAccelerators()
+			if err == nil && len(availableAccelerators) > 1 {
+				// Prioridade: NVIDIA > Intel > AMD (com base em desempenho típico)
+				if contains(availableAccelerators, "nvidia") {
+					hwAccel = "nvidia"
+				} else if contains(availableAccelerators, "intel") {
+					hwAccel = "intel"
+				} else if contains(availableAccelerators, "amd") {
+					hwAccel = "amd"
+				} else {
+					hwAccel = "none" // fallback para CPU se nenhum acelerador for encontrado
+				}
+			} else {
+				hwAccel = "none" // fallback para CPU em caso de erro
+			}
+		}
+		
+		// Configurar codec com base no acelerador selecionado
+		switch hwAccel {
+		case "nvidia":
+			settings.VideoCodec = "h264_nvenc"
+			// NVENC não usa presets do mesmo modo que x264
+			switch settings.Preset {
+			case "ultrafast", "superfast", "veryfast", "faster", "fast":
+				settings.Preset = "p1" // maior performance
+			case "medium":
+				settings.Preset = "p3" // balanceado
+			case "slow", "slower", "veryslow":
+				settings.Preset = "p7" // maior qualidade
+			}
+		case "intel":
+			settings.VideoCodec = "h264_qsv"
+			// QSV tem menos controle sobre presets
+			settings.Preset = "medium" // QSV não tem todos os presets do x264
+		case "amd":
+			settings.VideoCodec = "h264_amf"
+			// AMF tem presets diferentes
+			switch settings.Preset {
+			case "ultrafast", "superfast", "veryfast", "faster", "fast":
+				settings.Preset = "speed"
+			case "medium":
+				settings.Preset = "balanced"
+			case "slow", "slower", "veryslow":
+				settings.Preset = "quality"
+			}
+		}
+		
+		// Ajustar CRF para encoders de hardware (eles geralmente usam escalas diferentes)
+		if hwAccel == "nvidia" {
+			// NVENC usa uma escala de 0-51, mas opera melhor com controle de bitrate
+			settings.CRF = 0 // Desativar CRF para NVENC
+			
+			// Aumentar bitrate para melhor qualidade com NVENC
+			if settings.TargetBitrate > 0 {
+				settings.TargetBitrate = int64(float64(settings.TargetBitrate) * 1.5)
+			} else {
+				// Se não tiver bitrate definido, definir um com base na resolução
+				if video.Height <= 720 {
+					settings.TargetBitrate = 3000000 // 3 Mbps para 720p
+				} else if video.Height <= 1080 {
+					settings.TargetBitrate = 6000000 // 6 Mbps para 1080p
+				} else {
+					settings.TargetBitrate = 12000000 // 12 Mbps para 4K
+				}
+			}
+		}
+	}
 	
 	// Controle de qualidade baseado na opção escolhida (1-5)
 	switch quality {
@@ -648,19 +768,79 @@ func (ffmpeg *FFmpeg) calculateEncodingSettings(video *VideoInfo, quality int) *
 	return settings
 }
 
+// Função auxiliar para verificar se um slice contém um determinado valor
+func contains(slice []string, value string) bool {
+	for _, item := range slice {
+		if item == value {
+			return true
+		}
+	}
+	return false
+}
+
 // Constrói o comando para o FFmpeg
 func (ffmpeg *FFmpeg) buildFFmpegCommand(settings *EncodingSettings) []string {
-	// Remover o arquivo de entrada e saída, já que serão adicionados separadamente na função Execute
-	args := []string{
-		"-c:v", settings.VideoCodec,
-		"-crf", fmt.Sprintf("%d", settings.CRF),
-		"-preset", settings.Preset,
-	}
+	// Args iniciais vazios - serão adicionados com base no codec
+	args := []string{}
 	
-	// Adicionar controle de bitrate se especificado
-	if settings.TargetBitrate > 0 {
-		args = append(args, "-maxrate", fmt.Sprintf("%d", settings.TargetBitrate))
-		args = append(args, "-bufsize", fmt.Sprintf("%d", settings.TargetBitrate*2))
+	// Parâmetros específicos baseados no codec de vídeo
+	if strings.Contains(settings.VideoCodec, "nvenc") {
+		// Configuração especial para NVIDIA NVENC
+		args = append(args, "-c:v", settings.VideoCodec)
+		
+		// NVENC funciona melhor com controle de bitrate do que CRF
+		if settings.TargetBitrate > 0 {
+			args = append(args, "-b:v", fmt.Sprintf("%d", settings.TargetBitrate))
+			args = append(args, "-maxrate", fmt.Sprintf("%d", int64(float64(settings.TargetBitrate)*1.5)))
+			args = append(args, "-bufsize", fmt.Sprintf("%d", settings.TargetBitrate*2))
+		}
+		
+		// Presets específicos do NVENC
+		args = append(args, "-preset", settings.Preset)
+		
+		// Parâmetros adicionais para melhorar a qualidade do NVENC
+		args = append(args, "-rc", "vbr") // Usar taxa de bits variável
+		args = append(args, "-spatial-aq", "1") // Adaptive Quantization espacial
+		args = append(args, "-temporal-aq", "1") // Adaptive Quantization temporal
+		
+	} else if strings.Contains(settings.VideoCodec, "qsv") {
+		// Configuração especial para Intel QuickSync
+		args = append(args, "-c:v", settings.VideoCodec)
+		
+		// QSV também funciona melhor com controle de bitrate
+		if settings.TargetBitrate > 0 {
+			args = append(args, "-b:v", fmt.Sprintf("%d", settings.TargetBitrate))
+			args = append(args, "-maxrate", fmt.Sprintf("%d", int64(float64(settings.TargetBitrate)*1.5)))
+		}
+		
+		// Parâmetros de qualidade para QSV
+		args = append(args, "-preset", settings.Preset)
+		
+	} else if strings.Contains(settings.VideoCodec, "amf") {
+		// Configuração especial para AMD AMF
+		args = append(args, "-c:v", settings.VideoCodec)
+		
+		// AMF também funciona melhor com controle de bitrate
+		if settings.TargetBitrate > 0 {
+			args = append(args, "-b:v", fmt.Sprintf("%d", settings.TargetBitrate))
+			args = append(args, "-maxrate", fmt.Sprintf("%d", int64(float64(settings.TargetBitrate)*1.5)))
+		}
+		
+		// Presets específicos do AMF
+		args = append(args, "-quality", settings.Preset)
+		args = append(args, "-usage", "transcoding")
+		
+	} else {
+		// Configuração padrão de software (libx264)
+		args = append(args, "-c:v", settings.VideoCodec)
+		args = append(args, "-crf", fmt.Sprintf("%d", settings.CRF))
+		args = append(args, "-preset", settings.Preset)
+		
+		// Adicionar controle de bitrate se especificado
+		if settings.TargetBitrate > 0 {
+			args = append(args, "-maxrate", fmt.Sprintf("%d", settings.TargetBitrate))
+			args = append(args, "-bufsize", fmt.Sprintf("%d", settings.TargetBitrate*2))
+		}
 	}
 	
 	// Adicionar escala se especificada - garantir que não criamos filtros inválidos
@@ -688,8 +868,14 @@ func (ffmpeg *FFmpeg) buildFFmpegCommand(settings *EncodingSettings) []string {
 	// Copiar áudio
 	args = append(args, "-c:a", "aac", "-b:a", "128k")
 	
-	// Configurações de performance
-	args = append(args, "-movflags", "+faststart")
+	// Passar os metadados
+	args = append(args, "-map_metadata", "0")
+	
+	// Manter todos os streams de áudio e legendas
+	args = append(args, "-map", "0")
+	
+	// Mostrar progresso e usar um só thread para poder exibir na tela
+	args = append(args, "-stats", "-progress", "-", "-nostdin")
 	
 	return args
 } 
