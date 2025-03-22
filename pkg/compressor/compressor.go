@@ -306,7 +306,7 @@ func (vc *VideoCompressor) compressVideoSingle(inputFile, outputFile string, set
 			"CUDA error", "Generic error in an external library", "Invalid data found",
 			"Device creation failed", "Error initializing", "0xfffffff", "0xffffff",
 			"0xffffffea", // Erro comum em placas NVIDIA no Windows
-			"NVENC error"
+			"NVENC error",
 		}
 		
 		needFallback := false
@@ -803,9 +803,9 @@ func (vc *VideoCompressor) BuildFFmpegArgs(inputFile, outputFile string, setting
 				// Definir um bitrate padrão baseado na resolução
 				defaultBitrate := "4M" // Valor padrão para maioria dos vídeos
 				if video, _ := vc.FFmpeg.GetVideoInfo(inputFile); video != nil {
-					if video.Height <= 720 {
+					if video.VideoInfo.Height <= 720 {
 						defaultBitrate = "2M" // 2 Mbps para 720p
-					} else if video.Height <= 1080 {
+					} else if video.VideoInfo.Height <= 1080 {
 						defaultBitrate = "4M" // 4 Mbps para 1080p
 					} else {
 						defaultBitrate = "8M" // 8 Mbps para 4K
