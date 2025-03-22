@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.5.4] - Correções de Compatibilidade NVENC e Sintaxe
+
+### Corrigido
+- Erro de sintaxe no tratamento de erros relacionados à aceleração de hardware
+- Corrigidas referências aos campos de altura de vídeo para compatibilidade
+- Melhorado o tratamento de erros específicos do NVENC no Windows
+- Parâmetros NVENC ajustados para maior estabilidade
+
+### Melhorado
+- Detecção de resolução de vídeo para ajuste automático de bitrate
+- Implementação mais robusta do fallback de GPU para CPU
+- Tratamento de erros com mensagens mais detalhadas
+
 ## [1.5.3] - Correções específicas para NVIDIA no Windows
 
 ### Corrigido
