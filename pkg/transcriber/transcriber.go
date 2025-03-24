@@ -429,7 +429,20 @@ func (t *Transcriber) checkForAudioStreamAlternative(videoFile string) (bool, er
 func (t *Transcriber) transcribeAudio(audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
 	t.Logger.Info("Transcrevendo áudio...")
 	
-	// Determinar qual abordagem usar para o Whisper com base no caminho encontrado
+	// Verificar se estamos no Windows
+	isWindows := util.IsWindows()
+	
+	// No Windows, tentar o modo direto primeiro
+	if isWindows {
+		t.Logger.Info("Usando método direto para transcrição no Windows...")
+		result, detectedLang, wordCount, err := t.transcribeDirectPython(audioFile, options, progress)
+		if err == nil {
+			return result, detectedLang, wordCount, nil
+		}
+		t.Logger.Warning("Método direto falhou: %v. Tentando abordagem normal...", err)
+	}
+	
+	// Se não é Windows ou o método direto falhou, usar a abordagem padrão
 	if strings.Contains(t.WhisperPath, "whisper-cpp") || strings.Contains(t.WhisperPath, "whisper.cpp") {
 		return t.transcribeWithWhisperCPP(audioFile, options, progress)
 	} else {
@@ -638,6 +651,271 @@ func (t *Transcriber) transcribeWithWhisperPython(audioFile string, options Tran
 	}
 	
 	return string(transcription), detectedLang, wordCount, nil
+}
+
+// transcribeDirectPython tenta transcrever o áudio chamando o módulo Python diretamente
+func (t *Transcriber) transcribeDirectPython(audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
+	// Encontrar o Python através do método mais confiável
+	pythonPath, err := findPythonDirect()
+	if err != nil {
+		return "", "", 0, fmt.Errorf("não foi possível encontrar o Python: %w", err)
+	}
+	
+	t.Logger.Debug("Usando Python direto: %s", pythonPath)
+	
+	// Construir a linha de comando para chamar o whisper_ctranslate2 diretamente
+	var args []string
+	
+	// Primeiro tentar com whisper_ctranslate2
+	args = []string{
+		"-c",
+		fmt.Sprintf(`
+import sys
+try:
+    import whisper_ctranslate2
+    audio_file = %q
+    model_name = %q
+    
+    # Configurar o modelo
+    model = whisper_ctranslate2.load_model(%q)
+    
+    # Gerar transcrição
+    result = model.transcribe(audio_file)
+    
+    # Gravar a saída
+    output_file = %q
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(result["text"])
+    
+    # Imprimir informações para o log
+    print(f"Detected language: {result.get('language', 'unknown')}")
+    print(f"Transcription complete. Written to {output_file}")
+    
+except ImportError:
+    print("whisper_ctranslate2 not found, will try alternative")
+    sys.exit(2)
+except Exception as e:
+    print(f"Error during transcription: {e}")
+    sys.exit(1)
+`, audioFile, options.Model, options.Model, strings.TrimSuffix(audioFile, filepath.Ext(audioFile))+".txt"),
+	}
+	
+	// Criar o comando
+	cmd := exec.Command(pythonPath, args...)
+	
+	// Definir o ambiente apenas com variáveis essenciais para evitar conflitos
+	cleanEnv := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"SYSTEMROOT=" + os.Getenv("SYSTEMROOT"),
+		"TEMP=" + os.Getenv("TEMP"),
+		"TMP=" + os.Getenv("TMP"),
+		"USERPROFILE=" + os.Getenv("USERPROFILE"),
+		"PYTHONIOENCODING=utf-8",
+	}
+	
+	cmd.Env = cleanEnv
+	
+	// Capturar saída
+	t.Logger.Debug("Executando transcrição direta...")
+	output, err := cmd.CombinedOutput()
+	
+	// Log da saída para diagnóstico
+	outputStr := string(output)
+	t.Logger.Debug("Saída da transcrição direta: %s", outputStr)
+	
+	if err != nil {
+		// Se for o código 2, significa que whisper_ctranslate2 não está instalado
+		// Vamos tentar com openai-whisper
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 2 {
+			t.Logger.Info("whisper_ctranslate2 não encontrado, tentando com openai-whisper...")
+			return t.transcribeDirectWithOpenAIWhisper(pythonPath, audioFile, options, progress)
+		}
+		
+		return "", "", 0, fmt.Errorf("erro na transcrição direta: %v\nOutput: %s", err, outputStr)
+	}
+	
+	// Ler o arquivo de saída
+	outputFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
+	transcription, err := os.ReadFile(outputFile)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("erro ao ler transcrição: %w", err)
+	}
+	
+	// Extrair idioma detectado
+	detectedLang := "desconhecido"
+	if strings.Contains(outputStr, "Detected language:") {
+		parts := strings.Split(outputStr, "Detected language:")
+		if len(parts) > 1 {
+			langPart := strings.Split(parts[1], "\n")[0]
+			detectedLang = strings.TrimSpace(langPart)
+		}
+	}
+	
+	// Contagem de palavras
+	wordCount := len(strings.Fields(string(transcription)))
+	
+	// Atualizar progresso
+	if progress != nil {
+		progress.Update(100) // 100% completo
+	}
+	
+	return string(transcription), detectedLang, wordCount, nil
+}
+
+// transcribeDirectWithOpenAIWhisper tenta transcrever usando o módulo openai-whisper diretamente
+func (t *Transcriber) transcribeDirectWithOpenAIWhisper(pythonPath, audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
+	// Script Python para usar openai-whisper diretamente
+	args := []string{
+		"-c",
+		fmt.Sprintf(`
+import sys
+try:
+    import whisper
+    audio_file = %q
+    model_name = %q
+    language = %q
+    
+    # Carregar o modelo
+    model = whisper.load_model(model_name)
+    
+    # Definir opções de decodificação
+    decode_options = {}
+    if language != "auto":
+        decode_options["language"] = language
+    
+    # Gerar transcrição
+    result = model.transcribe(audio_file, **decode_options)
+    
+    # Gravar a saída
+    output_file = %q
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write(result["text"])
+    
+    # Imprimir informações para o log
+    print(f"Detected language: {result.get('language', 'unknown')}")
+    print(f"Transcription complete. Written to {output_file}")
+    
+except ImportError:
+    print("openai-whisper not found. Please install with: pip install openai-whisper")
+    sys.exit(1)
+except Exception as e:
+    print(f"Error during transcription: {e}")
+    sys.exit(1)
+`, audioFile, options.Model, options.Language, strings.TrimSuffix(audioFile, filepath.Ext(audioFile))+".txt"),
+	}
+	
+	// Criar o comando
+	cmd := exec.Command(pythonPath, args...)
+	
+	// Definir o ambiente apenas com variáveis essenciais
+	cleanEnv := []string{
+		"PATH=" + os.Getenv("PATH"),
+		"SYSTEMROOT=" + os.Getenv("SYSTEMROOT"),
+		"TEMP=" + os.Getenv("TEMP"),
+		"TMP=" + os.Getenv("TMP"),
+		"USERPROFILE=" + os.Getenv("USERPROFILE"),
+		"PYTHONIOENCODING=utf-8",
+	}
+	
+	cmd.Env = cleanEnv
+	
+	// Capturar saída
+	t.Logger.Debug("Executando transcrição direta com openai-whisper...")
+	output, err := cmd.CombinedOutput()
+	
+	// Log da saída para diagnóstico
+	outputStr := string(output)
+	t.Logger.Debug("Saída da transcrição com openai-whisper: %s", outputStr)
+	
+	if err != nil {
+		return "", "", 0, fmt.Errorf("erro na transcrição com openai-whisper: %v\nOutput: %s", err, outputStr)
+	}
+	
+	// Ler o arquivo de saída
+	outputFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
+	transcription, err := os.ReadFile(outputFile)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("erro ao ler transcrição: %w", err)
+	}
+	
+	// Extrair idioma detectado
+	detectedLang := "desconhecido"
+	if strings.Contains(outputStr, "Detected language:") {
+		parts := strings.Split(outputStr, "Detected language:")
+		if len(parts) > 1 {
+			langPart := strings.Split(parts[1], "\n")[0]
+			detectedLang = strings.TrimSpace(langPart)
+		}
+	}
+	
+	// Contagem de palavras
+	wordCount := len(strings.Fields(string(transcription)))
+	
+	// Atualizar progresso
+	if progress != nil {
+		progress.Update(100) // 100% completo
+	}
+	
+	return string(transcription), detectedLang, wordCount, nil
+}
+
+// findPythonDirect encontra o Python usando métodos mais robustos para o Windows
+func findPythonDirect() (string, error) {
+	// Primeiro, tentar os métodos de busca normais
+	pythonPath, err := findPythonCommand()
+	if err == nil && pythonPath != "" {
+		return pythonPath, nil
+	}
+	
+	// Se estamos no Windows, tentar caminhos comuns diretamente
+	if util.IsWindows() {
+		// Caminhos comuns onde o Python pode estar instalado
+		commonPaths := []string{
+			"C:\\Python310\\python.exe",
+			"C:\\Python39\\python.exe",
+			"C:\\Python38\\python.exe",
+			"C:\\Python37\\python.exe",
+			"C:\\Python36\\python.exe",
+			"C:\\Program Files\\Python310\\python.exe",
+			"C:\\Program Files\\Python39\\python.exe",
+			"C:\\Program Files\\Python38\\python.exe",
+			"C:\\Program Files (x86)\\Python310\\python.exe",
+			"C:\\Program Files (x86)\\Python39\\python.exe",
+			"C:\\Program Files (x86)\\Python38\\python.exe",
+		}
+		
+		// Verificar cada caminho diretamente
+		for _, path := range commonPaths {
+			if _, err := os.Stat(path); err == nil {
+				// Testar se o Python é funcional
+				cmd := exec.Command(path, "--version")
+				if err := cmd.Run(); err == nil {
+					return path, nil
+				}
+			}
+		}
+		
+		// Verificar registro do Windows usando 'reg query'
+		cmd := exec.Command("reg", "query", "HKEY_LOCAL_MACHINE\\SOFTWARE\\Python\\PythonCore", "/s")
+		output, err := cmd.CombinedOutput()
+		if err == nil {
+			// Procurar por caminhos de instalação nos resultados
+			lines := strings.Split(string(output), "\n")
+			for _, line := range lines {
+				if strings.Contains(strings.ToLower(line), "installpath") && strings.Contains(line, "REG_SZ") {
+					parts := strings.SplitN(line, "REG_SZ", 2)
+					if len(parts) > 1 {
+						possiblePath := strings.TrimSpace(parts[1]) + "\\python.exe"
+						if _, err := os.Stat(possiblePath); err == nil {
+							return possiblePath, nil
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	return "", fmt.Errorf("não foi possível encontrar o Python")
 }
 
 // DisplayTranscriptionResult exibe o resultado da transcrição no console

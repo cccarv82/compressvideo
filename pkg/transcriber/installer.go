@@ -97,21 +97,137 @@ func (wi *WhisperInstaller) InstallWhisperCtranslate2(progress *util.ProgressTra
 			// No Windows, verificar se o Python está instalado mas não está no PATH
 			wi.Logger.Warning("Python não encontrado no PATH. Verificando caminhos comuns...")
 			
-			// Instruções para o usuário
-			wi.Logger.Info("Verifique se o Python está instalado corretamente")
-			wi.Logger.Info("Certifique-se de que a opção 'Add Python to PATH' foi selecionada durante a instalação")
-			wi.Logger.Info("Como alternativa, execute manualmente: pip install -U whisper-ctranslate2")
+			// Tentar método mais robusto
+			pythonCmd, err = findPythonDirect()
+			if err != nil {
+				// Instruções para o usuário
+				wi.Logger.Info("Verifique se o Python está instalado corretamente")
+				wi.Logger.Info("Certifique-se de que a opção 'Add Python to PATH' foi selecionada durante a instalação")
+				wi.Logger.Info("Como alternativa, execute manualmente: pip install -U whisper-ctranslate2")
+				return fmt.Errorf("Python não encontrado no sistema: %w", err)
+			}
+			wi.Logger.Success("Python encontrado em: %s", pythonCmd)
+		} else {
+			return fmt.Errorf("Python não encontrado no sistema: %w", err)
 		}
-		return fmt.Errorf("Python não encontrado no sistema: %w", err)
 	}
 	
-	// Instalar whisper-ctranslate2
-	whisperPath, err := installWhisperCtranslate2(pythonCmd, wi.Logger)
+	// Verificar se o whisper_ctranslate2 já está instalado
+	wi.Logger.Info("Verificando se whisper-ctranslate2 já está instalado...")
+	isInstalled := checkWhisperCtranslate2Installed(pythonCmd)
+	
+	if isInstalled {
+		wi.Logger.Success("whisper-ctranslate2 já está instalado!")
+	} else {
+		// Instalar whisper-ctranslate2
+		wi.Logger.Info("Instalando whisper-ctranslate2 via pip...")
+		whisperPath, err := installWhisperCtranslate2(pythonCmd, wi.Logger)
+		if err != nil {
+			return fmt.Errorf("falha ao instalar whisper-ctranslate2: %w", err)
+		}
+		wi.Logger.Success("whisper-ctranslate2 instalado com sucesso em: %s", whisperPath)
+	}
+	
+	// Verificar a instalação novamente
+	if !checkWhisperCtranslate2Installed(pythonCmd) {
+		wi.Logger.Warning("Não foi possível verificar a instalação do whisper-ctranslate2")
+		wi.Logger.Info("Vamos tentar fazer o modo direto funcionar mesmo assim...")
+	}
+	
+	// Criar o wrapper de qualquer forma (pode ser útil para usos futuros)
+	whisperPath, err := createWhisperCtranslate2Wrapper(pythonCmd, wi.Logger)
 	if err != nil {
-		return fmt.Errorf("falha ao instalar whisper-ctranslate2: %w", err)
+		wi.Logger.Warning("Não foi possível criar o wrapper: %v", err)
+		wi.Logger.Info("Isso não é um problema grave, pois usaremos o modo direto.")
+	} else {
+		wi.Logger.Success("Wrapper criado com sucesso em: %s", whisperPath)
+		wi.Logger.Info("Você pode usar este comando diretamente ou através do compressvideo.")
 	}
 	
-	wi.Logger.Success("whisper-ctranslate2 instalado com sucesso em: %s", whisperPath)
+	// Adicionar instruções específicas para Windows
+	if util.IsWindows() {
+		wi.Logger.Info("Para garantir o funcionamento no Windows, também recomendamos:")
+		wi.Logger.Info("1. Executar o compressvideo como administrador")
+		wi.Logger.Info("2. Usar a flag --force-audio para ignorar erros de detecção de áudio")
+	}
+	
+	return nil
+}
+
+// checkWhisperCtranslate2Installed verifica se o whisper_ctranslate2 está corretamente instalado
+func checkWhisperCtranslate2Installed(pythonPath string) bool {
+	// Criar um script Python simples para testar a importação
+	checkCmd := exec.Command(pythonPath, "-c", "import whisper_ctranslate2; print('OK')")
+	output, err := checkCmd.CombinedOutput()
+	
+	// Se o comando executou com sucesso e retornou "OK", está instalado
+	return err == nil && strings.Contains(string(output), "OK")
+}
+
+// installWhisperCtranslate2WithPython instala whisper-ctranslate2 usando um comando Python direto
+func installWhisperCtranslate2WithPython(pythonPath string, logger *util.Logger) error {
+	logger.Info("Instalando whisper-ctranslate2 usando Python direto...")
+	
+	// Script Python para instalar o pacote
+	installScript := `
+import sys
+import subprocess
+import os
+
+try:
+    import pip
+except ImportError:
+    print("Pip não está disponível. Tentando usar subprocess diretamente.")
+    try:
+        # Executar pip como um processo externo
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "whisper-ctranslate2"])
+        print("Instalação concluída via subprocess.")
+    except Exception as e:
+        print(f"Erro ao instalar via subprocess: {e}")
+        sys.exit(1)
+else:
+    try:
+        # Usar pip diretamente
+        import pip._internal
+        pip._internal.main(["install", "--user", "whisper-ctranslate2"])
+        print("Instalação concluída via pip direto.")
+    except Exception as e:
+        print(f"Erro ao instalar via pip direto: {e}")
+        try:
+            # Tentar com subprocess como fallback
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "--user", "whisper-ctranslate2"])
+            print("Instalação concluída via subprocess (fallback).")
+        except Exception as e2:
+            print(f"Erro ao instalar via subprocess (fallback): {e2}")
+            sys.exit(1)
+
+# Verificar se a instalação funcionou
+try:
+    import whisper_ctranslate2
+    print("whisper_ctranslate2 importado com sucesso!")
+except ImportError as e:
+    print(f"Falha ao importar whisper_ctranslate2 após instalação: {e}")
+    sys.exit(1)
+
+print("Instalação e verificação concluídas com sucesso.")
+`
+	
+	// Executar o script Python
+	cmd := exec.Command(pythonPath, "-c", installScript)
+	output, err := cmd.CombinedOutput()
+	
+	// Log da saída para diagnóstico
+	logger.Debug("Saída da instalação: %s", string(output))
+	
+	if err != nil {
+		return fmt.Errorf("erro ao instalar whisper-ctranslate2: %v\nOutput: %s", err, string(output))
+	}
+	
+	// Verificar se a instalação foi bem-sucedida
+	if !strings.Contains(string(output), "Instalação e verificação concluídas com sucesso") {
+		return fmt.Errorf("instalação aparentemente falhou: %s", string(output))
+	}
+	
 	return nil
 }
 
