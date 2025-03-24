@@ -943,67 +943,85 @@ func (t *Transcriber) transcribeDirectSimple(audioFile string, options Transcrip
 	tempDir := os.TempDir()
 	scriptPath := filepath.Join(tempDir, "simple_transcribe.py")
 	
-	// Conteúdo do script simples que usa apenas a biblioteca speech_recognition
+	// Conteúdo do script simples corrigido que usa apenas a biblioteca speech_recognition
+	// Versão corrigida que evita o erro 'AudioFile' object has no attribute 'audio'
 	scriptContent := `
 import speech_recognition as sr
 import sys
 import os
 import wave
+import math
 
 def get_audio_duration(file_path):
-    with wave.open(file_path, 'rb') as wf:
-        frames = wf.getnframes()
-        rate = wf.getframerate()
-        duration = frames / float(rate)
-        return duration
+    try:
+        with wave.open(file_path, 'rb') as wf:
+            frames = wf.getnframes()
+            rate = wf.getframerate()
+            duration = frames / float(rate)
+            return duration
+    except Exception as e:
+        print(f"Erro ao obter duração do áudio: {e}")
+        return 60  # Valor padrão se não conseguir determinar
 
 def transcribe_audio(audio_file):
-    r = sr.Recognizer()
+    recognizer = sr.Recognizer()
     duration = get_audio_duration(audio_file)
     
-    chunk_size = 60  # 60 seconds per chunk
-    total_chunks = int(duration / chunk_size) + 1
+    # Dividir em chunks menores para processar
+    # Não podemos acessar source.audio diretamente, então vamos reabrir o arquivo para cada chunk
+    chunk_duration = 30  # segundos por chunk (reduzido para evitar problemas de memória)
+    total_chunks = math.ceil(duration / chunk_duration)
     
     full_transcript = ""
+    word_count = 0
     
-    with open(audio_file.replace('.wav', '.txt'), 'w', encoding='utf-8') as output_file:
+    output_file_path = audio_file.replace('.wav', '.txt')
+    with open(output_file_path, 'w', encoding='utf-8') as output_file:
         for i in range(total_chunks):
-            start_time = i * chunk_size
+            start_time = i * chunk_duration
             if start_time >= duration:
                 break
                 
             print(f"Processando segmento {i+1}/{total_chunks}...")
             
+            # Precisamos abrir o arquivo para cada segmento
+            # Não é possível usar source.audio.get_raw_data como estava antes
             with sr.AudioFile(audio_file) as source:
-                if duration > chunk_size:
-                    source.audio = sr.AudioData(
-                        source.audio.get_raw_data(
-                            start_time * 1000,  # milliseconds
-                            min(chunk_size * 1000, (duration - start_time) * 1000)
-                        ),
-                        source.audio.sample_rate,
-                        source.audio.sample_width
-                    )
-                
-                audio = r.record(source)
-                
+                # Definir o offset de leitura do áudio para o segmento atual
+                # Aqui usamos record com offset e duration para capturar somente o segmento desejado
                 try:
-                    if len(sys.argv) > 2 and sys.argv[2] != "auto":
-                        text = r.recognize_google(audio, language=sys.argv[2])
-                    else:
-                        text = r.recognize_google(audio)
+                    audio_data = recognizer.record(
+                        source, 
+                        offset=start_time,
+                        duration=min(chunk_duration, duration - start_time)
+                    )
                     
-                    timestamp = f"[{int(start_time//60):02d}:{int(start_time%60):02d} - {int(min(start_time+chunk_size, duration)//60):02d}:{int(min(start_time+chunk_size, duration)%60):02d}]"
-                    segment_text = f"{timestamp} {text}"
-                    print(segment_text)
-                    output_file.write(segment_text + "\n\n")
-                    full_transcript += segment_text + "\n\n"
-                except sr.UnknownValueError:
-                    output_file.write(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] [Sem fala detectada]\n\n")
-                    print(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] Sem fala detectada neste segmento")
-                except sr.RequestError as e:
-                    output_file.write(f"[ERRO] Não foi possível solicitar resultados do serviço Google Speech Recognition; {e}\n")
-                    print(f"Erro na API de reconhecimento: {e}")
+                    # Usar a API do Google para reconhecimento de fala
+                    try:
+                        language = None
+                        if len(sys.argv) > 2 and sys.argv[2] != "auto":
+                            language = sys.argv[2]
+                        
+                        if language:
+                            text = recognizer.recognize_google(audio_data, language=language)
+                        else:
+                            text = recognizer.recognize_google(audio_data)
+                        
+                        timestamp = f"[{int(start_time//60):02d}:{int(start_time%60):02d} - {int(min(start_time+chunk_duration, duration)//60):02d}:{int(min(start_time+chunk_duration, duration)%60):02d}]"
+                        segment_text = f"{timestamp} {text}"
+                        print(segment_text)
+                        output_file.write(segment_text + "\n\n")
+                        full_transcript += text + " "
+                        
+                    except sr.UnknownValueError:
+                        print(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] Sem fala detectada neste segmento")
+                        output_file.write(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] [Sem fala detectada]\n\n")
+                    except sr.RequestError as e:
+                        print(f"Erro na API de reconhecimento: {e}")
+                        output_file.write(f"[ERRO] Não foi possível solicitar resultados do serviço Google Speech Recognition; {e}\n")
+                except Exception as e:
+                    print(f"Erro ao processar segmento {i+1}: {e}")
+                    output_file.write(f"[ERRO] Erro ao processar segmento {i+1}: {e}\n")
     
     # Contar palavras
     word_count = len(full_transcript.split())
@@ -1017,10 +1035,14 @@ if __name__ == "__main__":
         sys.exit(1)
     
     audio_file = sys.argv[1]
-    word_count = transcribe_audio(audio_file)
     
-    # Imprimir contagem de palavras como último item (será capturado pelo Go)
-    print(f"WORDCOUNT:{word_count}")
+    try:
+        word_count = transcribe_audio(audio_file)
+        # Imprimir contagem de palavras como último item (será capturado pelo Go)
+        print(f"WORDCOUNT:{word_count}")
+    except Exception as e:
+        print(f"Erro durante a transcrição: {e}")
+        sys.exit(1)
 `
 	
 	// Escrever script no arquivo temporário
