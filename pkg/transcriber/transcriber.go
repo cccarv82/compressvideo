@@ -489,6 +489,15 @@ func (t *Transcriber) transcribeWithWhisperCPP(audioFile string, options Transcr
 
 // transcribeWithWhisperPython transcreve usando a implementação Python do Whisper
 func (t *Transcriber) transcribeWithWhisperPython(audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
+	// Verificar se estamos no Windows
+	isWindows := util.IsWindows()
+	
+	// Log detalhado para diagnóstico
+	t.Logger.Debug("Usando WhisperPath: %s", t.WhisperPath)
+	
+	// Para o Windows, verificar se o arquivo é um .bat
+	isBatchFile := isWindows && strings.HasSuffix(t.WhisperPath, ".bat")
+	
 	// Construir o comando para o whisper python
 	args := []string{
 		audioFile,
@@ -506,15 +515,102 @@ func (t *Transcriber) transcribeWithWhisperPython(audioFile string, options Tran
 		args = append(args, "--word_timestamps", "True")
 	}
 	
+	// Log de comando para diagnóstico
+	t.Logger.Debug("Comando a ser executado: %s %v", t.WhisperPath, args)
+	
+	var cmd *exec.Cmd
+	var output []byte
+	var err error
+	
+	if isWindows {
+		if isBatchFile {
+			// Para arquivos batch no Windows, precisamos usar cmd.exe
+			t.Logger.Debug("Executando via cmd.exe porque o whisper é um arquivo .bat")
+			cmdArgs := []string{"/C", t.WhisperPath}
+			cmdArgs = append(cmdArgs, args...)
+			cmd = exec.Command("cmd.exe", cmdArgs...)
+		} else {
+			// Para executáveis normais no Windows
+			cmd = exec.Command(t.WhisperPath, args...)
+		}
+		
+		// Definir o ambiente de execução para Windows
+		// Para garantir que todas as variáveis de ambiente estejam disponíveis
+		cmd.Env = os.Environ()
+		
+		// Tentar usar diretório de trabalho do executável para garantir 
+		// que as DLLs e dependências sejam encontradas
+		if !isBatchFile {
+			cmd.Dir = filepath.Dir(t.WhisperPath)
+		}
+	} else {
+		// Para sistemas Unix, executar normalmente
+		cmd = exec.Command(t.WhisperPath, args...)
+	}
+	
 	// Executar o comando
-	cmd := exec.Command(t.WhisperPath, args...)
-	output, err := cmd.CombinedOutput()
+	t.Logger.Debug("Iniciando execução do Whisper...")
+	output, err = cmd.CombinedOutput()
+	
+	// Log da saída para diagnóstico
+	if len(output) > 0 {
+		t.Logger.Debug("Saída do comando Whisper: %s", string(output))
+	}
+	
 	if err != nil {
-		return "", "", 0, fmt.Errorf("erro ao transcrever com Whisper Python: %v\nOutput: %s", err, string(output))
+		errMsg := fmt.Sprintf("erro ao transcrever com Whisper Python: %v", err)
+		
+		// Adicionar mais informações no Windows para diagnóstico
+		if isWindows {
+			errMsg += fmt.Sprintf("\nWindows error code: %v", err)
+			// Verificar se o erro é relacionado a permissões ou ambiente
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				errMsg += fmt.Sprintf("\nExit code: 0x%x", exitErr.ExitCode())
+			}
+		}
+		
+		// Adicionar a saída para diagnóstico
+		if len(output) > 0 {
+			errMsg += fmt.Sprintf("\nOutput:\n%s", string(output))
+		}
+		
+		return "", "", 0, fmt.Errorf(errMsg)
 	}
 	
 	// O Whisper Python cria um arquivo de texto com o mesmo nome do arquivo de entrada
 	outputTxtFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
+	t.Logger.Debug("Verificando arquivo de saída: %s", outputTxtFile)
+	
+	// Verificar se o arquivo de saída existe
+	if _, err := os.Stat(outputTxtFile); os.IsNotExist(err) {
+		t.Logger.Warning("Arquivo de saída não encontrado: %s", outputTxtFile)
+		
+		// Tentar encontrar o arquivo em outro local (whisper às vezes tem comportamentos diferentes)
+		// Verificar no diretório atual
+		currDir, _ := os.Getwd()
+		altOutputFile := filepath.Join(currDir, filepath.Base(strings.TrimSuffix(audioFile, filepath.Ext(audioFile))+".txt"))
+		t.Logger.Debug("Tentando arquivo alternativo: %s", altOutputFile)
+		
+		if _, err := os.Stat(altOutputFile); err == nil {
+			outputTxtFile = altOutputFile
+			t.Logger.Debug("Usando arquivo alternativo encontrado: %s", outputTxtFile)
+		} else {
+			// Se não encontrou, tentar usar a saída direta do comando
+			t.Logger.Warning("Arquivo alternativo também não encontrado. Usando saída do comando.")
+			// Criar arquivo temporário com a saída
+			tempFile, err := os.CreateTemp("", "whisper-output-*.txt")
+			if err == nil {
+				defer tempFile.Close()
+				tempFile.WriteString(string(output))
+				outputTxtFile = tempFile.Name()
+				t.Logger.Debug("Criado arquivo temporário com a saída: %s", outputTxtFile)
+			} else {
+				return "", "", 0, fmt.Errorf("não foi possível criar arquivo temporário para a saída: %v", err)
+			}
+		}
+	}
+	
+	// Ler o arquivo de transcrição
 	transcription, err := os.ReadFile(outputTxtFile)
 	if err != nil {
 		return "", "", 0, fmt.Errorf("erro ao ler arquivo de transcrição: %v", err)

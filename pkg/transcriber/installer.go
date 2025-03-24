@@ -117,53 +117,129 @@ func (wi *WhisperInstaller) InstallWhisperCtranslate2(progress *util.ProgressTra
 
 // findPythonCommand tenta encontrar o comando Python correto, considerando as peculiaridades do Windows
 func findPythonCommand() (string, error) {
-	// Lista de possíveis comandos Python
-	pythonCommands := []string{"python3", "python"}
+	var pythonPaths []string
+	isWindows := util.IsWindows()
 	
-	// No Windows, verificar caminhos comuns
-	if util.IsWindows() {
-		// Adicionar caminhos comuns de instalação do Python no Windows
+	// No Windows, verificar caminhos comuns primeiro
+	if isWindows {
+		// Obter variáveis de ambiente importantes
 		userProfile := os.Getenv("USERPROFILE")
+		programFiles := os.Getenv("ProgramFiles")
+		programFilesX86 := os.Getenv("ProgramFiles(x86)")
+		localAppData := os.Getenv("LOCALAPPDATA")
+		
+		// Caminhos comuns de instalação do Python no Windows
+		commonPaths := []string{}
+		
+		// AppData/Local/Programs/Python
+		if localAppData != "" {
+			pythonPaths := findPythonInstalationsIn(filepath.Join(localAppData, "Programs", "Python"))
+			commonPaths = append(commonPaths, pythonPaths...)
+		}
+		
+		// UserProfile/AppData/Local/Programs/Python
 		if userProfile != "" {
-			pythonDirs, _ := filepath.Glob(filepath.Join(userProfile, "AppData", "Local", "Programs", "Python", "Python*"))
-			for _, dir := range pythonDirs {
-				pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
-			}
+			pythonPaths := findPythonInstalationsIn(filepath.Join(userProfile, "AppData", "Local", "Programs", "Python"))
+			commonPaths = append(commonPaths, pythonPaths...)
 		}
 		
-		// Verificar também em C:\Python*
-		pythonDirs, _ := filepath.Glob("C:\\Python*")
-		for _, dir := range pythonDirs {
-			pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
+		// Program Files
+		if programFiles != "" {
+			pythonPaths := findPythonInstalationsIn(programFiles)
+			commonPaths = append(commonPaths, pythonPaths...)
 		}
 		
-		// Verificar também o ProgramFiles
-		progFiles := os.Getenv("ProgramFiles")
-		if progFiles != "" {
-			pythonDirs, _ := filepath.Glob(filepath.Join(progFiles, "Python*"))
-			for _, dir := range pythonDirs {
-				pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
-			}
+		// Program Files (x86)
+		if programFilesX86 != "" {
+			pythonPaths := findPythonInstalationsIn(programFilesX86)
+			commonPaths = append(commonPaths, pythonPaths...)
+		}
+		
+		// C:\Python*
+		cPythonPaths := findPythonInstalationsIn("C:\\")
+		commonPaths = append(commonPaths, cPythonPaths...)
+		
+		// Adicionar Windows Store Python
+		if userProfile != "" {
+			storePythonPaths := findPythonInstalationsIn(filepath.Join(userProfile, "AppData", "Local", "Microsoft", "WindowsApps"))
+			commonPaths = append(commonPaths, storePythonPaths...)
+		}
+		
+		// Adicionar os caminhos encontrados
+		pythonPaths = append(pythonPaths, commonPaths...)
+	}
+	
+	// Adicionar comandos padrão (python3, python) depois dos caminhos específicos
+	pythonPaths = append(pythonPaths, "python3", "python")
+	
+	// Remover duplicatas mantendo a ordem
+	seen := make(map[string]bool)
+	var uniquePaths []string
+	for _, path := range pythonPaths {
+		if !seen[path] {
+			seen[path] = true
+			uniquePaths = append(uniquePaths, path)
 		}
 	}
 	
-	// Testar cada comando
-	for _, cmd := range pythonCommands {
-		if path, err := exec.LookPath(cmd); err == nil {
-			// Verificar se é um Python real e não um alias do Windows Store
-			if util.IsWindows() {
-				// Testar executando um comando simples
-				versionCmd := exec.Command(path, "--version")
-				if output, err := versionCmd.CombinedOutput(); err == nil && strings.Contains(string(output), "Python") {
-					return path, nil
+	// Log para diagnóstico
+	// fmt.Printf("Caminhos Python a verificar: %v\n", uniquePaths)
+	
+	// Verificar cada comando/caminho
+	for _, cmdPath := range uniquePaths {
+		foundPath, err := exec.LookPath(cmdPath)
+		if err == nil {
+			// Em sistemas Unix, qualquer Python encontrado é válido
+			if !isWindows {
+				return foundPath, nil
+			}
+			
+			// No Windows, verificar se é um Python real (não um alias)
+			// Executar python --version para testar
+			cmd := exec.Command(foundPath, "--version")
+			output, err := cmd.CombinedOutput()
+			
+			if err == nil && strings.Contains(strings.ToLower(string(output)), "python") {
+				// Verificar também a capacidade de instalar pacotes (para confirmar que é uma instalação real)
+				pipCmd := exec.Command(foundPath, "-m", "pip", "--version")
+				pipOutput, pipErr := pipCmd.CombinedOutput()
+				
+				if pipErr == nil && strings.Contains(string(pipOutput), "pip") {
+					// fmt.Printf("Python encontrado e válido: %s\n", foundPath)
+					return foundPath, nil
 				}
-			} else {
-				return path, nil
 			}
 		}
 	}
 	
 	return "", fmt.Errorf("não foi possível encontrar um comando Python válido")
+}
+
+// findPythonInstalationsIn procura instalações do Python em um diretório base
+func findPythonInstalationsIn(baseDir string) []string {
+	var paths []string
+	
+	// Verificar se o diretório existe
+	if _, err := os.Stat(baseDir); os.IsNotExist(err) {
+		return paths
+	}
+	
+	// Padrões para encontrar instalações Python
+	patterns := []string{
+		filepath.Join(baseDir, "Python*", "python.exe"),     // Python padrão
+		filepath.Join(baseDir, "*", "Python*", "python.exe"), // Subdiretórios
+		filepath.Join(baseDir, "python.exe"),                // Direto no diretório
+	}
+	
+	// Procurar usando cada padrão
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(pattern)
+		if err == nil && len(matches) > 0 {
+			paths = append(paths, matches...)
+		}
+	}
+	
+	return paths
 }
 
 // canUsePython verifica se o Python está disponível no sistema
@@ -220,26 +296,17 @@ func createWhisperCtranslate2Wrapper(pythonCmd string, logger *util.Logger) (str
 		return "", fmt.Errorf("não foi possível determinar o diretório home: %w", err)
 	}
 	
-	binDir := filepath.Join(homeDir, ".local", "bin")
+	// Caminhos para diferentes sistemas operacionais
+	var binDir string
 	if util.IsWindows() {
-		binDir = filepath.Join(homeDir, "AppData", "Local", "CompressVideo", "bin")
+		binDir = filepath.Join(homeDir, ".compressvideo", "bin")
+	} else {
+		binDir = filepath.Join(homeDir, ".local", "bin")
 	}
 	
 	// Criar diretório se não existir
 	if err := os.MkdirAll(binDir, 0755); err != nil {
 		return "", fmt.Errorf("falha ao criar diretório: %w", err)
-	}
-	
-	// Caminho para o whisper-ctranslate2
-	whisperCtranslate2Path := ""
-	scriptsDirPath := filepath.Join(filepath.Dir(pythonCmd), "Scripts")
-	
-	if util.IsWindows() {
-		// Procurar pelo executável whisper-ctranslate2 diretamente
-		whisperCtranslateDirect := filepath.Join(scriptsDirPath, "whisper-ctranslate2.exe")
-		if _, err := os.Stat(whisperCtranslateDirect); err == nil {
-			whisperCtranslate2Path = whisperCtranslateDirect
-		}
 	}
 	
 	// Caminho para o script wrapper
@@ -248,16 +315,60 @@ func createWhisperCtranslate2Wrapper(pythonCmd string, logger *util.Logger) (str
 		wrapperPath += ".bat"
 	}
 	
+	// Verificar caminhos para o whisper-ctranslate2
+	var whisperCtranslate2Path string
+	var scriptPath string
+	
+	if util.IsWindows() {
+		// Obter o diretório de scripts do Python (onde pip instala os executáveis)
+		pythonDir := filepath.Dir(pythonCmd)
+		scriptsDir := filepath.Join(pythonDir, "Scripts")
+		
+		// Procurar pelo executável whisper-ctranslate2.exe no diretório Scripts
+		possiblePath := filepath.Join(scriptsDir, "whisper-ctranslate2.exe")
+		if _, err := os.Stat(possiblePath); err == nil {
+			whisperCtranslate2Path = possiblePath
+			logger.Debug("Encontrado executável whisper-ctranslate2: %s", whisperCtranslate2Path)
+		}
+		
+		// Se não encontrou o executável, verificar o script Python
+		if whisperCtranslate2Path == "" {
+			possiblePath = filepath.Join(scriptsDir, "whisper-ctranslate2-script.py")
+			if _, err := os.Stat(possiblePath); err == nil {
+				scriptPath = possiblePath
+				logger.Debug("Encontrado script whisper-ctranslate2: %s", scriptPath)
+			}
+		}
+	}
+	
 	// Conteúdo do script
 	var content string
 	if util.IsWindows() {
+		// Melhorar o script batch para Windows
 		if whisperCtranslate2Path != "" {
-			content = fmt.Sprintf("@echo off\n\"%s\" %%*", whisperCtranslate2Path)
+			// Se encontramos o executável direto, usar ele
+			content = "@echo off\r\n" +
+				"setlocal\r\n" +
+				"set \"PATH=%PATH%;%~dp0\"\r\n" +
+				"\"" + whisperCtranslate2Path + "\" %*\r\n"
+		} else if scriptPath != "" {
+			// Se encontramos o script Python, usar ele
+			content = "@echo off\r\n" +
+				"setlocal\r\n" +
+				"set \"PATH=%PATH%;%~dp0\"\r\n" +
+				"\"" + pythonCmd + "\" \"" + scriptPath + "\" %*\r\n"
 		} else {
-			content = fmt.Sprintf("@echo off\n\"%s\" -m whisper_ctranslate2 %%*", pythonCmd)
+			// Usar o módulo diretamente como último recurso
+			content = "@echo off\r\n" +
+				"setlocal\r\n" +
+				"set \"PATH=%PATH%;%~dp0\"\r\n" +
+				"\"" + pythonCmd + "\" -m whisper_ctranslate2 %*\r\n"
 		}
 	} else {
-		content = fmt.Sprintf("#!/bin/sh\n%s -m whisper_ctranslate2 \"$@\"", pythonCmd)
+		// Script para Linux/MacOS
+		content = "#!/bin/sh\n" +
+			"export PATH=\"$PATH:$(dirname \"$0\")\"\n" +
+			pythonCmd + " -m whisper_ctranslate2 \"$@\"\n"
 	}
 	
 	// Escrever o script
@@ -265,12 +376,18 @@ func createWhisperCtranslate2Wrapper(pythonCmd string, logger *util.Logger) (str
 		return "", fmt.Errorf("falha ao criar wrapper: %w", err)
 	}
 	
-	// No Windows, verificar se o diretório está no PATH e adicionar instruções
+	logger.Success("Wrapper criado com sucesso: %s", wrapperPath)
+	
+	// No Windows, verificar se o diretório está no PATH
 	if util.IsWindows() {
 		pathEnv := os.Getenv("PATH")
-		if !strings.Contains(pathEnv, binDir) {
+		if !strings.Contains(strings.ToLower(pathEnv), strings.ToLower(binDir)) {
 			logger.Warning("O diretório %s não está no seu PATH", binDir)
-			logger.Info("Adicione-o manualmente ou use o caminho completo: %s", wrapperPath)
+			logger.Info("Para usar o comando 'whisper' globalmente, adicione este diretório ao PATH do sistema")
+			logger.Info("Enquanto isso, você pode usar o caminho completo: %s", wrapperPath)
+			
+			// Tentar adicionar ao PATH temporariamente
+			os.Setenv("PATH", binDir+string(os.PathListSeparator)+pathEnv)
 		}
 	}
 	
