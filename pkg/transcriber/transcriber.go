@@ -167,6 +167,19 @@ func (t *Transcriber) Transcribe(
 		return nil, fmt.Errorf("o arquivo de saída já existe")
 	}
 	
+	// Verificar se estamos no Windows para fornecer instruções personalizadas
+	if runtime.GOOS == "windows" && t.WhisperPath == "" {
+		// No Windows, oferecer instruções específicas para resolver problemas comuns
+		t.Logger.Warning("Não foi possível encontrar Whisper no Windows.")
+		t.Logger.Info("Tente executar o comando abaixo com a opção para Windows:")
+		t.Logger.Info("  compressvideo repair-whisper --ctranslate2")
+		t.Logger.Info("Se continuar tendo problemas, instale manualmente com:")
+		t.Logger.Info("  pip install -U whisper-ctranslate2")
+		t.Logger.Info("Em seguida, reinicie o CompressVideo.")
+		
+		return nil, fmt.Errorf("Whisper não encontrado. Use 'compressvideo repair-whisper --ctranslate2' no Windows")
+	}
+	
 	// Iniciar a transcrição
 	t.Logger.Info("Transcrevendo vídeo: %s", inputFile)
 	t.Logger.Info("Arquivo de saída: %s", outputFile)

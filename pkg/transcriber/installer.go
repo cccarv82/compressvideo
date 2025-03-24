@@ -36,28 +36,49 @@ func (wi *WhisperInstaller) CheckWhisperInstallation() (bool, error) {
 func (wi *WhisperInstaller) InstallWhisper(progress *util.ProgressTracker) error {
 	wi.Logger.Info("Instalando Whisper...")
 	
-	// Escolher o método de instalação com base nas capacidades do sistema
+	// Primeiro tentar usar a instalação via pip (mais fácil)
 	if canUsePython() {
-		// Instalar a versão Python do Whisper
-		whisperPath, err := installWhisperPython(wi.Logger)
+		pythonCmd, err := findPythonCommand()
 		if err != nil {
-			wi.Logger.Error("Falha ao instalar Whisper (Python): %v", err)
-			wi.Logger.Info("Tentando instalar versão C++...")
+			wi.Logger.Warning("Não foi possível encontrar Python: %v", err)
+		} else {
+			wi.Logger.Info("Python encontrado: %s", pythonCmd)
 			
-			// Falhou com Python, tenta C++
-			whisperPath, err = installWhisperCPP(wi.Logger)
-			if err != nil {
-				return fmt.Errorf("falha ao instalar Whisper: %w", err)
+			// Tentar instalar whisper-ctranslate2 (mais fácil no Windows)
+			if util.IsWindows() {
+				wi.Logger.Info("Tentando instalar whisper-ctranslate2 (recomendado para Windows)...")
+				if whisperPath, err := installWhisperCtranslate2(pythonCmd, wi.Logger); err == nil {
+					wi.Logger.Success("whisper-ctranslate2 instalado com sucesso em: %s", whisperPath)
+					return nil
+				} else {
+					wi.Logger.Warning("Falha ao instalar whisper-ctranslate2: %v", err)
+				}
 			}
+			
+			// Instalar a versão Python do Whisper
+			whisperPath, err := installWhisperPython(pythonCmd, wi.Logger)
+			if err == nil {
+				wi.Logger.Success("Whisper instalado com sucesso em: %s", whisperPath)
+				return nil
+			}
+			wi.Logger.Error("Falha ao instalar Whisper (Python): %v", err)
 		}
-		
-		wi.Logger.Success("Whisper instalado com sucesso em: %s", whisperPath)
-		return nil
 	}
 	
-	// Não tem Python, tenta C++
+	// Se não conseguiu com Python, tentar C++
+	wi.Logger.Info("Tentando instalar versão C++...")
 	whisperPath, err := installWhisperCPP(wi.Logger)
 	if err != nil {
+		// Se falhar no Windows, oferecer instruções alternativas
+		if util.IsWindows() {
+			wi.Logger.Error("Não foi possível instalar o Whisper automaticamente no Windows.")
+			wi.Logger.Info("Por favor, execute o seguinte comando no PowerShell ou prompt de comando:")
+			wi.Logger.Info("pip install -U whisper-ctranslate2")
+			wi.Logger.Info("Após a instalação, crie um arquivo whisper.bat em um diretório do PATH com o conteúdo:")
+			wi.Logger.Info("@echo off")
+			wi.Logger.Info("whisper-ctranslate2 %*")
+			return fmt.Errorf("falha ao instalar Whisper no Windows. Siga as instruções manuais acima")
+		}
 		return fmt.Errorf("falha ao instalar Whisper: %w", err)
 	}
 	
@@ -65,35 +86,219 @@ func (wi *WhisperInstaller) InstallWhisper(progress *util.ProgressTracker) error
 	return nil
 }
 
-// canUsePython verifica se o Python está disponível no sistema
-func canUsePython() bool {
-	_, err := exec.LookPath("python3")
-	if err == nil {
-		return true
+// InstallWhisperCtranslate2 instala apenas a versão mais leve do Whisper (whisper-ctranslate2)
+func (wi *WhisperInstaller) InstallWhisperCtranslate2(progress *util.ProgressTracker) error {
+	wi.Logger.Info("Instalando whisper-ctranslate2...")
+	
+	// Procurar por Python
+	pythonCmd, err := findPythonCommand()
+	if err != nil {
+		if util.IsWindows() {
+			// No Windows, verificar se o Python está instalado mas não está no PATH
+			wi.Logger.Warning("Python não encontrado no PATH. Verificando caminhos comuns...")
+			
+			// Instruções para o usuário
+			wi.Logger.Info("Verifique se o Python está instalado corretamente")
+			wi.Logger.Info("Certifique-se de que a opção 'Add Python to PATH' foi selecionada durante a instalação")
+			wi.Logger.Info("Como alternativa, execute manualmente: pip install -U whisper-ctranslate2")
+		}
+		return fmt.Errorf("Python não encontrado no sistema: %w", err)
 	}
 	
-	_, err = exec.LookPath("python")
-	return err == nil
+	// Instalar whisper-ctranslate2
+	whisperPath, err := installWhisperCtranslate2(pythonCmd, wi.Logger)
+	if err != nil {
+		return fmt.Errorf("falha ao instalar whisper-ctranslate2: %w", err)
+	}
+	
+	wi.Logger.Success("whisper-ctranslate2 instalado com sucesso em: %s", whisperPath)
+	return nil
+}
+
+// findPythonCommand tenta encontrar o comando Python correto, considerando as peculiaridades do Windows
+func findPythonCommand() (string, error) {
+	// Lista de possíveis comandos Python
+	pythonCommands := []string{"python3", "python"}
+	
+	// No Windows, verificar caminhos comuns
+	if util.IsWindows() {
+		// Adicionar caminhos comuns de instalação do Python no Windows
+		userProfile := os.Getenv("USERPROFILE")
+		if userProfile != "" {
+			pythonDirs, _ := filepath.Glob(filepath.Join(userProfile, "AppData", "Local", "Programs", "Python", "Python*"))
+			for _, dir := range pythonDirs {
+				pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
+			}
+		}
+		
+		// Verificar também em C:\Python*
+		pythonDirs, _ := filepath.Glob("C:\\Python*")
+		for _, dir := range pythonDirs {
+			pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
+		}
+		
+		// Verificar também o ProgramFiles
+		progFiles := os.Getenv("ProgramFiles")
+		if progFiles != "" {
+			pythonDirs, _ := filepath.Glob(filepath.Join(progFiles, "Python*"))
+			for _, dir := range pythonDirs {
+				pythonCommands = append(pythonCommands, filepath.Join(dir, "python.exe"))
+			}
+		}
+	}
+	
+	// Testar cada comando
+	for _, cmd := range pythonCommands {
+		if path, err := exec.LookPath(cmd); err == nil {
+			// Verificar se é um Python real e não um alias do Windows Store
+			if util.IsWindows() {
+				// Testar executando um comando simples
+				versionCmd := exec.Command(path, "--version")
+				if output, err := versionCmd.CombinedOutput(); err == nil && strings.Contains(string(output), "Python") {
+					return path, nil
+				}
+			} else {
+				return path, nil
+			}
+		}
+	}
+	
+	return "", fmt.Errorf("não foi possível encontrar um comando Python válido")
+}
+
+// canUsePython verifica se o Python está disponível no sistema
+func canUsePython() bool {
+	cmd, err := findPythonCommand()
+	return err == nil && cmd != ""
+}
+
+// installWhisperCtranslate2 instala a versão ctranslate2 do Whisper (mais fácil no Windows)
+func installWhisperCtranslate2(pythonCmd string, logger *util.Logger) (string, error) {
+	logger.Info("Instalando whisper-ctranslate2...")
+	
+	// Verificar se pip está disponível
+	pipCmd := filepath.Join(filepath.Dir(pythonCmd), "pip")
+	if util.IsWindows() {
+		pipCmd += ".exe"
+	}
+	
+	if _, err := os.Stat(pipCmd); os.IsNotExist(err) {
+		// Se pip não estiver junto com o python, usar o próprio python para chamar pip
+		pipCmd = pythonCmd
+		
+		// Instalar whisper-ctranslate2
+		cmd := exec.Command(pipCmd, "-m", "pip", "install", "-U", "whisper-ctranslate2")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("falha ao instalar via pip: %w\nOutput: %s", err, output)
+		}
+	} else {
+		// Usar pip diretamente
+		cmd := exec.Command(pipCmd, "install", "-U", "whisper-ctranslate2")
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			return "", fmt.Errorf("falha ao instalar via pip: %w\nOutput: %s", err, output)
+		}
+	}
+	
+	// Criar wrapper
+	wrapperPath, err := createWhisperCtranslate2Wrapper(pythonCmd, logger)
+	if err != nil {
+		return "", err
+	}
+	
+	return wrapperPath, nil
+}
+
+// createWhisperCtranslate2Wrapper cria um arquivo batch para chamar whisper-ctranslate2
+func createWhisperCtranslate2Wrapper(pythonCmd string, logger *util.Logger) (string, error) {
+	logger.Info("Criando wrapper para whisper-ctranslate2...")
+	
+	// Determinar diretório para o wrapper
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("não foi possível determinar o diretório home: %w", err)
+	}
+	
+	binDir := filepath.Join(homeDir, ".local", "bin")
+	if util.IsWindows() {
+		binDir = filepath.Join(homeDir, "AppData", "Local", "CompressVideo", "bin")
+	}
+	
+	// Criar diretório se não existir
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		return "", fmt.Errorf("falha ao criar diretório: %w", err)
+	}
+	
+	// Caminho para o whisper-ctranslate2
+	whisperCtranslate2Path := ""
+	scriptsDirPath := filepath.Join(filepath.Dir(pythonCmd), "Scripts")
+	
+	if util.IsWindows() {
+		// Procurar pelo executável whisper-ctranslate2 diretamente
+		whisperCtranslateDirect := filepath.Join(scriptsDirPath, "whisper-ctranslate2.exe")
+		if _, err := os.Stat(whisperCtranslateDirect); err == nil {
+			whisperCtranslate2Path = whisperCtranslateDirect
+		}
+	}
+	
+	// Caminho para o script wrapper
+	wrapperPath := filepath.Join(binDir, "whisper")
+	if util.IsWindows() {
+		wrapperPath += ".bat"
+	}
+	
+	// Conteúdo do script
+	var content string
+	if util.IsWindows() {
+		if whisperCtranslate2Path != "" {
+			content = fmt.Sprintf("@echo off\n\"%s\" %%*", whisperCtranslate2Path)
+		} else {
+			content = fmt.Sprintf("@echo off\n\"%s\" -m whisper_ctranslate2 %%*", pythonCmd)
+		}
+	} else {
+		content = fmt.Sprintf("#!/bin/sh\n%s -m whisper_ctranslate2 \"$@\"", pythonCmd)
+	}
+	
+	// Escrever o script
+	if err := os.WriteFile(wrapperPath, []byte(content), 0755); err != nil {
+		return "", fmt.Errorf("falha ao criar wrapper: %w", err)
+	}
+	
+	// No Windows, verificar se o diretório está no PATH e adicionar instruções
+	if util.IsWindows() {
+		pathEnv := os.Getenv("PATH")
+		if !strings.Contains(pathEnv, binDir) {
+			logger.Warning("O diretório %s não está no seu PATH", binDir)
+			logger.Info("Adicione-o manualmente ou use o caminho completo: %s", wrapperPath)
+		}
+	}
+	
+	return wrapperPath, nil
 }
 
 // installWhisperPython instala o Whisper usando pip
-func installWhisperPython(logger *util.Logger) (string, error) {
+func installWhisperPython(pythonCmd string, logger *util.Logger) (string, error) {
 	logger.Info("Instalando Whisper usando Python...")
 	
-	// Determinar qual Python usar
-	pythonCmd := "python3"
-	_, err := exec.LookPath(pythonCmd)
-	if err != nil {
-		pythonCmd = "python"
-		_, err = exec.LookPath(pythonCmd)
-		if err != nil {
-			return "", fmt.Errorf("Python não encontrado no sistema")
-		}
+	// Verificar se pip está disponível
+	pipCmd := filepath.Join(filepath.Dir(pythonCmd), "pip")
+	if util.IsWindows() {
+		pipCmd += ".exe"
 	}
 	
 	// Instalar Whisper via pip
 	logger.Info("Instalando pacote openai-whisper...")
-	cmd := exec.Command(pythonCmd, "-m", "pip", "install", "openai-whisper")
+	var cmd *exec.Cmd
+	
+	if _, err := os.Stat(pipCmd); os.IsNotExist(err) {
+		// Se pip não estiver junto com o python, usar o próprio python para chamar pip
+		cmd = exec.Command(pythonCmd, "-m", "pip", "install", "openai-whisper")
+	} else {
+		// Usar pip diretamente
+		cmd = exec.Command(pipCmd, "install", "openai-whisper")
+	}
+	
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("falha ao instalar via pip: %w\nOutput: %s", err, output)
@@ -131,13 +336,13 @@ func createWhisperWrapper(pythonCmd string, logger *util.Logger) (string, error)
 	// Caminho para o script wrapper
 	wrapperPath := filepath.Join(binDir, "whisper")
 	if util.IsWindows() {
-		wrapperPath += ".cmd"
+		wrapperPath += ".bat"
 	}
 	
 	// Conteúdo do script
 	var content string
 	if util.IsWindows() {
-		content = fmt.Sprintf("@echo off\n%s -m whisper %%*", pythonCmd)
+		content = fmt.Sprintf("@echo off\n\"%s\" -m whisper %%*", pythonCmd)
 	} else {
 		content = fmt.Sprintf("#!/bin/sh\n%s -m whisper \"$@\"", pythonCmd)
 	}
@@ -145,6 +350,15 @@ func createWhisperWrapper(pythonCmd string, logger *util.Logger) (string, error)
 	// Escrever o script
 	if err := os.WriteFile(wrapperPath, []byte(content), 0755); err != nil {
 		return "", fmt.Errorf("falha ao criar wrapper: %w", err)
+	}
+	
+	// No Windows, verificar se o diretório está no PATH e adicionar instruções
+	if util.IsWindows() {
+		pathEnv := os.Getenv("PATH")
+		if !strings.Contains(pathEnv, binDir) {
+			logger.Warning("O diretório %s não está no seu PATH", binDir)
+			logger.Info("Adicione-o manualmente ou use o caminho completo: %s", wrapperPath)
+		}
 	}
 	
 	return wrapperPath, nil
@@ -238,6 +452,9 @@ func checkCppBuildDependencies() error {
 	deps := []string{"git", "make", "g++"}
 	if runtime.GOOS == "darwin" {
 		deps = []string{"git", "make", "clang++"}
+	} else if runtime.GOOS == "windows" {
+		// No Windows, precisamos do MSYS2/MinGW ou equivalente
+		deps = []string{"git", "make", "gcc"}
 	}
 	
 	for _, dep := range deps {
@@ -249,17 +466,11 @@ func checkCppBuildDependencies() error {
 	return nil
 }
 
-// copyFile copia um arquivo de origem para destino
+// copyFile copia um arquivo de src para dst
 func copyFile(src, dst string) error {
 	input, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	
-	err = os.WriteFile(dst, input, 0755)
-	if err != nil {
-		return err
-	}
-	
-	return nil
+	return os.WriteFile(dst, input, 0755)
 } 
