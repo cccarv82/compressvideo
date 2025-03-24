@@ -1,16 +1,17 @@
+// Package util fornece funções utilitárias para o CompressVideo
 package util
 
 // Version information
 const (
-	// AppName is the name of the application
-	AppName = "CompressVideo"
-	// Version is the current version of the application
-	Version = "1.5.8"
-	// BuildDate is the date the application was built
+	// Name é o nome do aplicativo
+	Name = "CompressVideo"
+	// Version é a versão do aplicativo
+	Version = "1.5.9"
+	// BuildDate é a data em que o aplicativo foi compilado
 	BuildDate = "development"
 )
 
 // GetVersionInfo returns a formatted string with version information
 func GetVersionInfo() string {
-	return AppName + " v" + Version + " (" + BuildDate + ")"
+	return Name + " v" + Version + " (" + BuildDate + ")"
 } 

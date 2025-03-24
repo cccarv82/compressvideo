@@ -26,6 +26,9 @@ type TranscriptionOptions struct {
 	
 	// Mostrar timestamps
 	ShowTimestamps bool
+	
+	// Forçar transcrição mesmo se o áudio não for detectado (útil no Windows)
+	ForceAudio bool
 }
 
 // TranscriptionResult contém informações sobre o resultado da transcrição
@@ -99,6 +102,7 @@ func DefaultOptions() TranscriptionOptions {
 		OutputFormat:  "txt",
 		Model:         "base",
 		ShowTimestamps: false,
+		ForceAudio:     false,
 	}
 }
 
@@ -185,7 +189,7 @@ func (t *Transcriber) Transcribe(
 	t.Logger.Info("Arquivo de saída: %s", outputFile)
 	
 	// Extrair o áudio do vídeo
-	audioFile, err := t.extractAudio(inputFile, progress)
+	audioFile, err := t.extractAudio(inputFile, options, progress)
 	if err != nil {
 		// Verificar se é o erro específico de falta de áudio
 		if strings.Contains(err.Error(), "não contém uma faixa de áudio") {
@@ -221,55 +225,116 @@ func (t *Transcriber) Transcribe(
 }
 
 // extractAudio extrai o áudio de um vídeo usando FFmpeg
-func (t *Transcriber) extractAudio(videoFile string, progress *util.ProgressTracker) (string, error) {
+func (t *Transcriber) extractAudio(videoFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, error) {
 	t.Logger.Info("Extraindo áudio do vídeo...")
 	
-	// Verificar se o vídeo tem uma faixa de áudio
-	hasAudio, err := t.checkForAudioStream(videoFile)
-	if err != nil {
-		return "", fmt.Errorf("erro ao verificar faixa de áudio: %w", err)
-	}
-	
-	if !hasAudio {
-		return "", fmt.Errorf("o vídeo não contém uma faixa de áudio para transcrição")
+	// Verificar se o vídeo tem uma faixa de áudio (pular se ForceAudio estiver ativo)
+	if !options.ForceAudio {
+		hasAudio, err := t.checkForAudioStream(videoFile)
+		if err != nil {
+			// No Windows, tentar um método alternativo ou pular verificação
+			if util.IsWindows() {
+				t.Logger.Warning("Problema ao verificar faixa de áudio: %v", err)
+				t.Logger.Info("Tentando método alternativo para verificar áudio...")
+				
+				// Tentar método alternativo usando FFmpeg
+				hasAudioAlt, altErr := t.checkForAudioStreamAlternative(videoFile)
+				if altErr != nil {
+					t.Logger.Warning("Método alternativo também falhou: %v", altErr)
+					t.Logger.Info("Assumindo que o vídeo tem áudio e tentando prosseguir...")
+				} else if !hasAudioAlt {
+					return "", fmt.Errorf("o vídeo não contém uma faixa de áudio para transcrição")
+				}
+				// Se o método alternativo funcionou e encontrou áudio, prosseguir
+			} else {
+				return "", fmt.Errorf("erro ao verificar faixa de áudio: %w", err)
+			}
+		} else if !hasAudio {
+			return "", fmt.Errorf("o vídeo não contém uma faixa de áudio para transcrição")
+		}
+	} else {
+		t.Logger.Info("Flag ForceAudio ativa - pulando verificação de áudio")
 	}
 	
 	// Criar um arquivo temporário para o áudio
-	audioFile := filepath.Join(t.TempDir, filepath.Base(videoFile)+".wav")
+	audioFile, err := os.CreateTemp("", "audio-*.wav")
+	if err != nil {
+		return "", fmt.Errorf("erro ao criar arquivo temporário para áudio: %w", err)
+	}
+	audioFile.Close()
 	
-	// Construir comando FFmpeg para extrair áudio
-	args := []string{
-		"-i", videoFile,
-		"-vn",                // Sem vídeo
-		"-acodec", "pcm_s16le", // Codec de áudio PCM 16-bit
-		"-ar", "16000",       // Taxa de amostragem 16kHz (boa para reconhecimento de fala)
-		"-ac", "1",           // Mono
-		"-y",                 // Sobrescrever se existir
-		audioFile,
+	// Garantir que o arquivo temporário tenha a extensão .wav
+	tempAudioPath := audioFile.Name()
+	if !strings.HasSuffix(tempAudioPath, ".wav") {
+		os.Remove(tempAudioPath)
+		tempAudioPath = tempAudioPath + ".wav"
 	}
 	
-	// Executar o comando
+	// Extrair áudio do vídeo usando FFmpeg
+	t.Logger.Info("Extraindo faixa de áudio do vídeo...")
+	
+	args := []string{
+		"-y",              // Sobrescrever arquivos de saída sem perguntar
+		"-i", videoFile,   // Arquivo de entrada
+		"-vn",             // Sem vídeo
+		"-acodec", "pcm_s16le", // Codec de áudio
+		"-ar", "16000",    // Taxa de amostragem
+		"-ac", "1",        // Mono
+		tempAudioPath,     // Arquivo de saída
+	}
+	
 	cmd := exec.Command(t.FFmpegPath, args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("erro ao extrair áudio: %w\nOutput: %s", err, string(output))
+		os.Remove(tempAudioPath) // Limpar arquivo temporário em caso de erro
+		t.Logger.Error("Saída do FFmpeg: %s", string(output))
+		return "", fmt.Errorf("erro ao extrair áudio: %w", err)
 	}
+	
+	// Verificar se o arquivo de áudio foi criado e não está vazio
+	fileInfo, err := os.Stat(tempAudioPath)
+	if err != nil {
+		return "", fmt.Errorf("erro ao verificar arquivo de áudio: %w", err)
+	}
+	
+	if fileInfo.Size() == 0 {
+		os.Remove(tempAudioPath)
+		return "", fmt.Errorf("o arquivo de áudio extraído está vazio; o vídeo provavelmente não tem áudio")
+	}
+	
+	t.Logger.Success("Áudio extraído com sucesso: %s (%.2f MB)",
+		tempAudioPath, float64(fileInfo.Size())/(1024*1024))
 	
 	// Atualizar progresso
 	if progress != nil {
 		progress.Update(30) // 30% do progresso total após extrair o áudio
 	}
 	
-	return audioFile, nil
+	return tempAudioPath, nil
 }
 
 // checkForAudioStream verifica se o vídeo tem uma faixa de áudio
 func (t *Transcriber) checkForAudioStream(videoFile string) (bool, error) {
 	// Obter o caminho do ffprobe a partir do caminho do ffmpeg
 	ffprobePath := t.FFmpegPath
-	if strings.HasSuffix(ffprobePath, "ffmpeg") {
-		ffprobePath = strings.TrimSuffix(ffprobePath, "ffmpeg") + "ffprobe"
+	
+	// Lidar melhor com extensões no Windows
+	if util.IsWindows() {
+		// No Windows, devemos tratar as extensões .exe
+		if strings.HasSuffix(ffprobePath, "ffmpeg.exe") {
+			ffprobePath = strings.TrimSuffix(ffprobePath, "ffmpeg.exe") + "ffprobe.exe"
+		} else if strings.HasSuffix(ffprobePath, "ffmpeg") {
+			// Talvez seja um caminho no WSL ou um arquivo sem extensão
+			ffprobePath = strings.TrimSuffix(ffprobePath, "ffmpeg") + "ffprobe"
+		}
+	} else {
+		// Em sistemas Unix, a extensão normalmente não é usada
+		if strings.HasSuffix(ffprobePath, "ffmpeg") {
+			ffprobePath = strings.TrimSuffix(ffprobePath, "ffmpeg") + "ffprobe"
+		}
 	}
+	
+	t.Logger.Debug("Usando ffprobe: %s", ffprobePath)
 	
 	// Usar FFprobe para listar todos os tipos de stream
 	args := []string{
@@ -280,16 +345,84 @@ func (t *Transcriber) checkForAudioStream(videoFile string) (bool, error) {
 		videoFile,
 	}
 	
+	t.Logger.Debug("Executando comando ffprobe: %s %v", ffprobePath, args)
 	cmd := exec.Command(ffprobePath, args...)
 	output, err := cmd.CombinedOutput()
+	
+	// Log detalhado para depuração
 	if err != nil {
-		// Falha na verificação - vamos simplesmente assumir que não há áudio
 		t.Logger.Warning("Não foi possível verificar a faixa de áudio com ffprobe: %v", err)
-		return false, nil
+		if len(output) > 0 {
+			t.Logger.Debug("Saída do ffprobe: %s", string(output))
+		}
+		return false, err
 	}
 	
+	outputStr := string(output)
+	t.Logger.Debug("Saída do ffprobe: %s", outputStr)
+	
 	// Se a saída contém "audio", então há pelo menos uma faixa de áudio
-	return strings.Contains(string(output), "audio"), nil
+	hasAudio := strings.Contains(outputStr, "audio")
+	if hasAudio {
+		t.Logger.Info("Faixa de áudio detectada no vídeo")
+	} else {
+		t.Logger.Warning("Nenhuma faixa de áudio detectada no vídeo")
+	}
+	
+	return hasAudio, nil
+}
+
+// checkForAudioStreamAlternative tenta extrair uma amostra pequena de áudio para verificar se o vídeo tem áudio
+func (t *Transcriber) checkForAudioStreamAlternative(videoFile string) (bool, error) {
+	t.Logger.Info("Usando método alternativo para verificar áudio...")
+	
+	// Criar arquivo temporário para amostra de áudio
+	sampleFile, err := os.CreateTemp("", "audio-sample-*.wav")
+	if err != nil {
+		return false, fmt.Errorf("erro ao criar arquivo temporário para amostra de áudio: %w", err)
+	}
+	samplePath := sampleFile.Name()
+	sampleFile.Close()
+	
+	// Tentar extrair apenas 1 segundo de áudio
+	args := []string{
+		"-y",              // Sobrescrever arquivos de saída sem perguntar
+		"-i", videoFile,   // Arquivo de entrada
+		"-vn",             // Sem vídeo
+		"-acodec", "pcm_s16le", // Codec de áudio
+		"-ar", "16000",    // Taxa de amostragem
+		"-ac", "1",        // Mono
+		"-t", "1",         // Extrair apenas 1 segundo
+		samplePath,        // Arquivo de saída
+	}
+	
+	cmd := exec.Command(t.FFmpegPath, args...)
+	output, err := cmd.CombinedOutput()
+	
+	// Verificar se o arquivo foi criado e tem algum conteúdo
+	defer os.Remove(samplePath) // Limpar arquivo temporário
+	
+	if err != nil {
+		t.Logger.Warning("Erro ao extrair amostra de áudio: %v", err)
+		t.Logger.Debug("Saída do FFmpeg: %s", string(output))
+		return false, err
+	}
+	
+	// Verificar se o arquivo tem conteúdo
+	fileInfo, err := os.Stat(samplePath)
+	if err != nil {
+		return false, err
+	}
+	
+	// Se o arquivo tem algum tamanho significativo, assumimos que tem áudio
+	hasAudio := fileInfo.Size() > 44 // 44 bytes é o tamanho do cabeçalho WAV
+	if hasAudio {
+		t.Logger.Info("Áudio detectado via método alternativo")
+	} else {
+		t.Logger.Warning("Nenhum áudio detectado via método alternativo")
+	}
+	
+	return hasAudio, nil
 }
 
 // transcribeAudio transcreve um arquivo de áudio para texto usando Whisper

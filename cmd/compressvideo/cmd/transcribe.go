@@ -17,6 +17,7 @@ var (
 	language      string // Idioma do vídeo (auto = detectar automaticamente)
 	modelSize     string // Tamanho do modelo (tiny, base, small, medium, large)
 	showTimestamp bool   // Mostrar timestamps para cada segmento
+	forceAudio    bool   // Forçar transcrição mesmo sem detecção de áudio (útil no Windows)
 )
 
 // transcribeCmd representa o comando transcribe
@@ -44,6 +45,7 @@ func init() {
 	transcribeCmd.Flags().StringVarP(&language, "language", "l", "auto", "Idioma do vídeo (auto = detectar automaticamente)")
 	transcribeCmd.Flags().StringVarP(&modelSize, "model", "m", "base", "Tamanho do modelo (tiny, base, small, medium, large)")
 	transcribeCmd.Flags().BoolVarP(&showTimestamp, "timestamps", "s", false, "Mostrar timestamps para cada segmento")
+	transcribeCmd.Flags().BoolVar(&forceAudio, "force-audio", false, "Forçar transcrição mesmo sem detecção de áudio (útil no Windows)")
 	
 	// Re-define algumas flags do comando raiz
 	transcribeCmd.Flags().StringVarP(&inputFile, "input", "i", "", "Input video file (required)")
@@ -106,6 +108,7 @@ func runTranscription() error {
 	options.Language = language
 	options.Model = modelSize
 	options.ShowTimestamps = showTimestamp
+	options.ForceAudio = forceAudio  // Nova opção para forçar transcrição sem detecção de áudio
 	
 	// Criar um tracker de progresso
 	progressOptions := util.ProgressTrackerOptions{
