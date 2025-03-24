@@ -943,8 +943,7 @@ func (t *Transcriber) transcribeDirectSimple(audioFile string, options Transcrip
 	tempDir := os.TempDir()
 	scriptPath := filepath.Join(tempDir, "simple_transcribe.py")
 	
-	// Conteúdo do script simples corrigido que usa apenas a biblioteca speech_recognition
-	// Versão corrigida que evita o erro 'AudioFile' object has no attribute 'audio'
+	// Conteúdo do script Python melhorado
 	scriptContent := `
 import speech_recognition as sr
 import sys
@@ -963,19 +962,22 @@ def get_audio_duration(file_path):
         print(f"Erro ao obter duração do áudio: {e}")
         return 60  # Valor padrão se não conseguir determinar
 
-def transcribe_audio(audio_file):
+def transcribe_audio(audio_file, output_file_path):
     recognizer = sr.Recognizer()
+    
+    # Aumentar a sensibilidade de reconhecimento
+    recognizer.energy_threshold = 300
+    recognizer.dynamic_energy_threshold = True
+    
     duration = get_audio_duration(audio_file)
     
     # Dividir em chunks menores para processar
-    # Não podemos acessar source.audio diretamente, então vamos reabrir o arquivo para cada chunk
-    chunk_duration = 30  # segundos por chunk (reduzido para evitar problemas de memória)
+    chunk_duration = 20  # segundos por chunk (reduzido para melhor precisão)
     total_chunks = math.ceil(duration / chunk_duration)
     
     full_transcript = ""
     word_count = 0
     
-    output_file_path = audio_file.replace('.wav', '.txt')
     with open(output_file_path, 'w', encoding='utf-8') as output_file:
         for i in range(total_chunks):
             start_time = i * chunk_duration
@@ -984,24 +986,26 @@ def transcribe_audio(audio_file):
                 
             print(f"Processando segmento {i+1}/{total_chunks}...")
             
-            # Precisamos abrir o arquivo para cada segmento
-            # Não é possível usar source.audio.get_raw_data como estava antes
+            # Abre o arquivo de áudio para cada segmento
             with sr.AudioFile(audio_file) as source:
-                # Definir o offset de leitura do áudio para o segmento atual
-                # Aqui usamos record com offset e duration para capturar somente o segmento desejado
+                # Ajustar o ambiente de áudio para melhorar a detecção de fala
+                recognizer.adjust_for_ambient_noise(source, duration=min(0.5, chunk_duration * 0.1))
+                
                 try:
+                    # Capturar o segmento de áudio
                     audio_data = recognizer.record(
                         source, 
                         offset=start_time,
                         duration=min(chunk_duration, duration - start_time)
                     )
                     
-                    # Usar a API do Google para reconhecimento de fala
+                    # Tenta transcrever com Google Speech API
                     try:
                         language = None
-                        if len(sys.argv) > 2 and sys.argv[2] != "auto":
-                            language = sys.argv[2]
+                        if len(sys.argv) > 3 and sys.argv[3] != "auto":
+                            language = sys.argv[3]
                         
+                        # Tenta transcrever
                         if language:
                             text = recognizer.recognize_google(audio_data, language=language)
                         else:
@@ -1014,8 +1018,9 @@ def transcribe_audio(audio_file):
                         full_transcript += text + " "
                         
                     except sr.UnknownValueError:
-                        print(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] Sem fala detectada neste segmento")
-                        output_file.write(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] [Sem fala detectada]\n\n")
+                        ts = f"[{int(start_time//60):02d}:{int(start_time%60):02d}]"
+                        print(f"{ts} Sem fala detectada neste segmento")
+                        output_file.write(f"{ts} [Sem fala detectada]\n\n")
                     except sr.RequestError as e:
                         print(f"Erro na API de reconhecimento: {e}")
                         output_file.write(f"[ERRO] Não foi possível solicitar resultados do serviço Google Speech Recognition; {e}\n")
@@ -1027,19 +1032,20 @@ def transcribe_audio(audio_file):
     word_count = len(full_transcript.split())
     print(f"Transcrição concluída. Total de palavras: {word_count}")
     
-    return word_count
+    return word_count, output_file_path
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Uso: python simple_transcribe.py <arquivo_audio.wav> [idioma]")
+    if len(sys.argv) < 3:
+        print("Uso: python simple_transcribe.py <arquivo_audio.wav> <arquivo_saida.txt> [idioma]")
         sys.exit(1)
     
     audio_file = sys.argv[1]
+    output_file = sys.argv[2]
     
     try:
-        word_count = transcribe_audio(audio_file)
-        # Imprimir contagem de palavras como último item (será capturado pelo Go)
+        word_count, output_path = transcribe_audio(audio_file, output_file)
         print(f"WORDCOUNT:{word_count}")
+        print(f"OUTPUT_PATH:{output_path}")
     except Exception as e:
         print(f"Erro durante a transcrição: {e}")
         sys.exit(1)
@@ -1065,13 +1071,27 @@ if __name__ == "__main__":
 		}
 	}
 	
-	outputFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
+	// Definir onde queremos que o arquivo final seja salvo
+	finalOutputFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
 	
-	// Executar script Python
-	cmd := exec.Command(pythonPath, scriptPath, audioFile, options.Language)
+	// Verificar se finalOutputFile é relativo ou absoluto
+	if !filepath.IsAbs(finalOutputFile) {
+		// Se é relativo, converter para absoluto
+		absPath, err := filepath.Abs(finalOutputFile)
+		if err == nil {
+			finalOutputFile = absPath
+		}
+	}
+	
+	// Executar script Python passando explicitamente o caminho do arquivo de saída
+	cmd := exec.Command(pythonPath, scriptPath, audioFile, finalOutputFile, options.Language)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
+	
+	// Registrar o comando que será executado
+	t.Logger.Debug("Executando comando: %s %s %s %s %s", 
+		pythonPath, scriptPath, audioFile, finalOutputFile, options.Language)
 	
 	err = cmd.Run()
 	if err != nil {
@@ -1079,11 +1099,12 @@ if __name__ == "__main__":
 			err, stdout.String(), stderr.String())
 	}
 	
-	// Obter contagem de palavras da saída
+	// Obter contagem de palavras e caminho do arquivo da saída
 	output := stdout.String()
 	wordCount := 0
+	actualOutputPath := ""
 	
-	// Procurar a linha com a contagem de palavras
+	// Procurar a linha com a contagem de palavras e o caminho do arquivo
 	lines := strings.Split(output, "\n")
 	for _, line := range lines {
 		if strings.HasPrefix(line, "WORDCOUNT:") {
@@ -1091,12 +1112,34 @@ if __name__ == "__main__":
 			if count, err := strconv.Atoi(countStr); err == nil {
 				wordCount = count
 			}
-			break
+		} else if strings.HasPrefix(line, "OUTPUT_PATH:") {
+			actualOutputPath = strings.TrimPrefix(line, "OUTPUT_PATH:")
 		}
 	}
 	
-	t.Logger.Success("Transcrição concluída com modo simples: %s", outputFile)
-	return outputFile, "auto", wordCount, nil
+	// Verificar se o arquivo foi criado corretamente
+	if _, err := os.Stat(finalOutputFile); os.IsNotExist(err) {
+		t.Logger.Warning("Arquivo de saída não encontrado no caminho esperado: %s", finalOutputFile)
+		
+		// Se atualOutputPath foi definido e existe, usar ele
+		if actualOutputPath != "" && actualOutputPath != finalOutputFile {
+			if _, err := os.Stat(actualOutputPath); err == nil {
+				// Copiar o conteúdo para o arquivo final
+				t.Logger.Info("Copiando arquivo da localização temporária para o destino final...")
+				content, err := os.ReadFile(actualOutputPath)
+				if err == nil {
+					if err := os.WriteFile(finalOutputFile, content, 0644); err != nil {
+						t.Logger.Warning("Erro ao copiar arquivo para destino final: %v", err)
+					} else {
+						t.Logger.Success("Arquivo copiado com sucesso para: %s", finalOutputFile)
+					}
+				}
+			}
+		}
+	}
+	
+	t.Logger.Success("Transcrição concluída com modo simples: %s", finalOutputFile)
+	return finalOutputFile, "auto", wordCount, nil
 }
 
 // DisplayTranscriptionResult exibe o resultado da transcrição no console
