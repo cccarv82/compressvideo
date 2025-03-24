@@ -77,7 +77,7 @@ test:
 # Install the application locally
 install: build
 	@echo "Installing $(BINARY_NAME)..."
-	go install $(LDFLAGS) ./cmd/compressvideo
+	go install $(LDFLAGS) .
 
 # Clean up build artifacts
 clean:

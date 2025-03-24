@@ -14,6 +14,7 @@ import (
 	"github.com/cccarv82/compressvideo/pkg/ffmpeg"
 	"github.com/cccarv82/compressvideo/pkg/reporter"
 	"github.com/cccarv82/compressvideo/pkg/util"
+	"github.com/cccarv82/compressvideo/pkg/transcriber"
 	"github.com/spf13/cobra"
 )
 
@@ -27,6 +28,9 @@ var (
 	preset  string  // fast, balanced, thorough
 	force   bool    // Overwrite output if exists
 	verbose bool    // Verbose logging
+	
+	// Transcription option
+	transcribe bool  // Whether to transcribe video to text
 	
 	// Cache options
 	useCache        bool   // Whether to use analysis cache
@@ -75,6 +79,11 @@ func init() {
 	rootCmd.Flags().BoolVarP(&useCache, "use-cache", "c", false, "Whether to use analysis cache")
 	rootCmd.Flags().BoolVarP(&cacheClearExpired, "clear-cache", "C", false, "Whether to clear expired cache entries")
 	rootCmd.Flags().IntVarP(&cacheMaxAge, "cache-max-age", "A", 7, "Maximum age of cache entries in days")
+	rootCmd.Flags().BoolVarP(&transcribe, "transcribe", "t", false, "Transcribe video audio to text file")
+
+	// Add commands
+	// Os comandos são adicionados automaticamente nas funções init() de seus respectivos arquivos
+	// Não precisa adicionar aqui para evitar duplicação
 }
 
 // validateFlags validates the input flags
@@ -133,7 +142,14 @@ func process(cmd *cobra.Command, args []string) error {
 		ext := filepath.Ext(inputFile)
 		base := filepath.Base(inputFile)
 		base = strings.TrimSuffix(base, ext)
-		outputFile = filepath.Join(dir, base+"-compressed"+ext)
+		
+		if transcribe {
+			// Para transcrição, usar extensão .txt por padrão
+			outputFile = filepath.Join(dir, base+".txt")
+		} else {
+			// Para compressão, usar o padrão anterior
+			outputFile = filepath.Join(dir, base+"-compressed"+ext)
+		}
 	}
 
 	// Check if input file is a directory
@@ -141,6 +157,13 @@ func process(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("error accessing input file: %w", err)
 	}
+
+	// Se a transcrição estiver ativada, processar o vídeo para transcrição
+	if transcribe {
+		return processTranscription(inputFile, outputFile)
+	}
+
+	// Se não for transcrição, continuar com o fluxo normal de compressão
 
 	// Initialize cache if enabled
 	var videoCache *cache.VideoAnalysisCache
@@ -625,4 +648,83 @@ func isVideoFile(filename string) bool {
 	ext := strings.ToLower(filepath.Ext(filename))
 	videoExts := []string{".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v", ".mpg", ".mpeg", ".3gp"}
 	return contains(videoExts, ext)
+}
+
+// processTranscription processa um único vídeo para transcrição
+func processTranscription(inputFile, outputFile string) error {
+	// Verificar se o arquivo de entrada é um vídeo
+	if !isVideoFile(inputFile) {
+		return fmt.Errorf("o arquivo de entrada não parece ser um vídeo válido: %s", inputFile)
+	}
+	
+	// Verificar se o arquivo de saída já existe (a menos que force esteja definido)
+	if _, err := os.Stat(outputFile); err == nil && !force {
+		return fmt.Errorf("o arquivo de saída já existe (use -f para sobrescrever): %s", outputFile)
+	}
+	
+	logger.Section("Transcrição de Vídeo")
+	logger.Field("Arquivo de Entrada", "%s", inputFile)
+	logger.Field("Arquivo de Saída", "%s", outputFile)
+	
+	// Inicializar o transcriber
+	transcribeInst, err := transcriber.NewTranscriber(logger)
+	if err != nil {
+		// Se for um erro de "Whisper não encontrado", sugerir o comando repair-whisper
+		if strings.Contains(err.Error(), "não foi possível encontrar o Whisper") {
+			logger.Error("Whisper não encontrado. Tente executar 'compressvideo repair-whisper' para instalar automaticamente.")
+			return err
+		}
+		return fmt.Errorf("falha ao inicializar transcriber: %w", err)
+	}
+	
+	// Configurar opções simplificadas
+	language := "auto"
+	model := "base"
+	showTimestamps := false
+	
+	// Criar um tracker de progresso
+	progressOptions := util.ProgressTrackerOptions{
+		Total:          100,
+		Description:    "Transcrevendo vídeo",
+		Logger:         logger,
+		ShowPercentage: true,
+		ShowSpeed:      true,
+	}
+	progressBar := util.NewProgressTrackerWithOptions(progressOptions)
+	
+	// Iniciar a transcrição
+	logger.Info("Iniciando transcrição do vídeo...")
+	startTime := time.Now()
+	
+	// Criamos uma estrutura de opções de transcrição
+	options := transcriber.TranscriptionOptions{
+		Language:       language,
+		Model:          model,
+		ShowTimestamps: showTimestamps,
+		OutputFormat:   "txt", // Formato padrão
+	}
+	
+	// Chamada ao método do objeto transcribeInst
+	result, err := transcribeInst.Transcribe(inputFile, outputFile, options, progressBar)
+	if err != nil {
+		progressBar.Finish()
+		return fmt.Errorf("erro na transcrição: %w", err)
+	}
+	
+	// Garantir que a barra de progresso termine
+	progressBar.Finish()
+	
+	// Exibir relatório
+	transcribeInst.DisplayTranscriptionResult(result)
+	
+	// Exibir uma mensagem amigável de conclusão
+	processingTime := time.Since(startTime).Round(time.Second)
+	
+	logger.Success("Transcrição concluída com sucesso!")
+	logger.Info("Arquivo %s transcrito em %s, gerando %d palavras", 
+		filepath.Base(inputFile), 
+		processingTime,
+		result.WordCount)
+	
+	return nil
 } 
