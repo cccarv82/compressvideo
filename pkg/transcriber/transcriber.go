@@ -2,10 +2,12 @@
 package transcriber
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"runtime"
@@ -425,29 +427,35 @@ func (t *Transcriber) checkForAudioStreamAlternative(videoFile string) (bool, er
 	return hasAudio, nil
 }
 
-// transcribeAudio transcreve um arquivo de áudio para texto usando Whisper
+// transcribeAudio transcreve um arquivo de áudio e retorna o caminho para a transcrição
 func (t *Transcriber) transcribeAudio(audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
 	t.Logger.Info("Transcrevendo áudio...")
 	
-	// Verificar se estamos no Windows
-	isWindows := util.IsWindows()
-	
-	// No Windows, tentar o modo direto primeiro
-	if isWindows {
+	// Se estamos no Windows, vamos tentar primeiro o modo direto, que é mais confiável
+	if util.IsWindows() {
 		t.Logger.Info("Usando método direto para transcrição no Windows...")
-		result, detectedLang, wordCount, err := t.transcribeDirectPython(audioFile, options, progress)
+		outputFile, language, wordCount, err := t.transcribeDirectPython(audioFile, options, progress)
 		if err == nil {
-			return result, detectedLang, wordCount, nil
+			return outputFile, language, wordCount, nil
 		}
 		t.Logger.Warning("Método direto falhou: %v. Tentando abordagem normal...", err)
 	}
 	
-	// Se não é Windows ou o método direto falhou, usar a abordagem padrão
-	if strings.Contains(t.WhisperPath, "whisper-cpp") || strings.Contains(t.WhisperPath, "whisper.cpp") {
+	// Verificar se temos o Whisper C++
+	if t.WhisperPath != "" && strings.Contains(t.WhisperPath, "whisper-cpp") {
+		// Se temos uma versão C++ do Whisper, usar ela para melhor performance
 		return t.transcribeWithWhisperCPP(audioFile, options, progress)
-	} else {
-		return t.transcribeWithWhisperPython(audioFile, options, progress)
 	}
+	
+	// Caso contrário, usar a versão Python
+	outputFile, language, wordCount, err := t.transcribeWithWhisperPython(audioFile, options, progress)
+	if err == nil {
+		return outputFile, language, wordCount, nil
+	}
+	
+	// Se falhar, tentar último recurso - o modo super simples usando Google Speech API
+	t.Logger.Warning("Todos os métodos padrão falharam. Tentando modo de compatibilidade simples...")
+	return t.transcribeDirectSimple(audioFile, options, progress)
 }
 
 // transcribeWithWhisperCPP transcreve usando a implementação C++ do Whisper
@@ -916,6 +924,157 @@ func findPythonDirect() (string, error) {
 	}
 	
 	return "", fmt.Errorf("não foi possível encontrar o Python")
+}
+
+// transcribeDirectSimple é uma implementação extremamente simples que usa apenas 
+// o módulo de reconhecimento de fala padrão do Python (speech_recognition)
+// Essa abordagem não requer módulos complexos como whisper e pode funcionar com
+// uma instalação Python mínima
+func (t *Transcriber) transcribeDirectSimple(audioFile string, options TranscriptionOptions, progress *util.ProgressTracker) (string, string, int, error) {
+	// Buscar Python
+	pythonPath, err := findPythonDirect()
+	if err != nil {
+		return "", "", 0, fmt.Errorf("não foi possível encontrar Python para modo direto simples: %w", err)
+	}
+	
+	t.Logger.Info("Usando modo de compatibilidade simples com apenas Python básico...")
+	
+	// Criar script temporário
+	tempDir := os.TempDir()
+	scriptPath := filepath.Join(tempDir, "simple_transcribe.py")
+	
+	// Conteúdo do script simples que usa apenas a biblioteca speech_recognition
+	scriptContent := `
+import speech_recognition as sr
+import sys
+import os
+import wave
+
+def get_audio_duration(file_path):
+    with wave.open(file_path, 'rb') as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+        duration = frames / float(rate)
+        return duration
+
+def transcribe_audio(audio_file):
+    r = sr.Recognizer()
+    duration = get_audio_duration(audio_file)
+    
+    chunk_size = 60  # 60 seconds per chunk
+    total_chunks = int(duration / chunk_size) + 1
+    
+    full_transcript = ""
+    
+    with open(audio_file.replace('.wav', '.txt'), 'w', encoding='utf-8') as output_file:
+        for i in range(total_chunks):
+            start_time = i * chunk_size
+            if start_time >= duration:
+                break
+                
+            print(f"Processando segmento {i+1}/{total_chunks}...")
+            
+            with sr.AudioFile(audio_file) as source:
+                if duration > chunk_size:
+                    source.audio = sr.AudioData(
+                        source.audio.get_raw_data(
+                            start_time * 1000,  # milliseconds
+                            min(chunk_size * 1000, (duration - start_time) * 1000)
+                        ),
+                        source.audio.sample_rate,
+                        source.audio.sample_width
+                    )
+                
+                audio = r.record(source)
+                
+                try:
+                    if len(sys.argv) > 2 and sys.argv[2] != "auto":
+                        text = r.recognize_google(audio, language=sys.argv[2])
+                    else:
+                        text = r.recognize_google(audio)
+                    
+                    timestamp = f"[{int(start_time//60):02d}:{int(start_time%60):02d} - {int(min(start_time+chunk_size, duration)//60):02d}:{int(min(start_time+chunk_size, duration)%60):02d}]"
+                    segment_text = f"{timestamp} {text}"
+                    print(segment_text)
+                    output_file.write(segment_text + "\n\n")
+                    full_transcript += segment_text + "\n\n"
+                except sr.UnknownValueError:
+                    output_file.write(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] [Sem fala detectada]\n\n")
+                    print(f"[{int(start_time//60):02d}:{int(start_time%60):02d}] Sem fala detectada neste segmento")
+                except sr.RequestError as e:
+                    output_file.write(f"[ERRO] Não foi possível solicitar resultados do serviço Google Speech Recognition; {e}\n")
+                    print(f"Erro na API de reconhecimento: {e}")
+    
+    # Contar palavras
+    word_count = len(full_transcript.split())
+    print(f"Transcrição concluída. Total de palavras: {word_count}")
+    
+    return word_count
+
+if __name__ == "__main__":
+    if len(sys.argv) < 2:
+        print("Uso: python simple_transcribe.py <arquivo_audio.wav> [idioma]")
+        sys.exit(1)
+    
+    audio_file = sys.argv[1]
+    word_count = transcribe_audio(audio_file)
+    
+    # Imprimir contagem de palavras como último item (será capturado pelo Go)
+    print(f"WORDCOUNT:{word_count}")
+`
+	
+	// Escrever script no arquivo temporário
+	if err := os.WriteFile(scriptPath, []byte(scriptContent), 0644); err != nil {
+		return "", "", 0, fmt.Errorf("erro ao criar script temporário: %w", err)
+	}
+	
+	// Instalar pacote necessário se não estiver presente
+	t.Logger.Info("Verificando e instalando pacote speech_recognition...")
+	checkCmd := exec.Command(pythonPath, "-c", "import speech_recognition")
+	checkErr := checkCmd.Run()
+	
+	if checkErr != nil {
+		t.Logger.Info("Instalando pacote speech_recognition...")
+		installCmd := exec.Command(pythonPath, "-m", "pip", "install", "SpeechRecognition")
+		installOut, installErr := installCmd.CombinedOutput()
+		if installErr != nil {
+			t.Logger.Warning("Erro ao instalar speech_recognition: %v\n%s", installErr, installOut)
+			return "", "", 0, fmt.Errorf("falha ao instalar dependências: %w", installErr)
+		}
+	}
+	
+	outputFile := strings.TrimSuffix(audioFile, filepath.Ext(audioFile)) + ".txt"
+	
+	// Executar script Python
+	cmd := exec.Command(pythonPath, scriptPath, audioFile, options.Language)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	
+	err = cmd.Run()
+	if err != nil {
+		return "", "", 0, fmt.Errorf("erro na transcrição simples: %w\nSaída: %s\nErro: %s", 
+			err, stdout.String(), stderr.String())
+	}
+	
+	// Obter contagem de palavras da saída
+	output := stdout.String()
+	wordCount := 0
+	
+	// Procurar a linha com a contagem de palavras
+	lines := strings.Split(output, "\n")
+	for _, line := range lines {
+		if strings.HasPrefix(line, "WORDCOUNT:") {
+			countStr := strings.TrimPrefix(line, "WORDCOUNT:")
+			if count, err := strconv.Atoi(countStr); err == nil {
+				wordCount = count
+			}
+			break
+		}
+	}
+	
+	t.Logger.Success("Transcrição concluída com modo simples: %s", outputFile)
+	return outputFile, "auto", wordCount, nil
 }
 
 // DisplayTranscriptionResult exibe o resultado da transcrição no console
